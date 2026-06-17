@@ -1,0 +1,68 @@
+#
+# Copyright IBM Corp. 2024 - 2026
+# SPDX-License-Identifier: Apache-2.0
+#
+
+# Python dependencies for AIOps Policy & Event Visualization
+# Updated with pinned versions to address security vulnerabilities
+
+# === Core Dependencies for Data Extraction ===
+
+# Scylla/Cassandra database driver (for data extraction from Cassandra)
+# Using scylla-driver as it's a drop-in replacement for cassandra-driver
+# with better performance and easier installation
+# Updated to latest stable version to address security vulnerabilities
+scylla-driver>=3.29.1,<4.0.0
+
+# === Optional Dependencies for Enhanced Performance ===
+
+# Fast JSON parsing (used in process_policies_and_events.py)
+# Provides 2-3x faster JSON parsing, falls back to standard json if not available
+# Updated to latest stable version
+orjson>=3.10.7,<4.0.0
+
+# Performance monitoring (used in copy_policies_details_from_cassandra.py)
+# Enables memory usage tracking and optimization
+# Updated to latest stable version to address security vulnerabilities
+psutil>=6.1.0,<7.0.0
+
+# Progress bars (used in process_policies_and_events.py)
+# Provides visual feedback during long-running operations
+# Updated to latest stable version
+tqdm>=4.67.1,<5.0.0
+
+# === Optional Dependencies for Test/Generation Scripts ===
+
+# Data manipulation library (only needed for generate_policy_exports*.py scripts)
+# Not required for core functionality
+# Updated to latest stable version to address multiple CVEs
+# Note: pandas has many transitive dependencies that may trigger security alerts
+pandas>=2.2.3,<3.0.0
+
+# === Security Notes ===
+
+# This file uses version ranges (>=X.Y.Z,<MAJOR+1.0.0) to:
+# 1. Allow automatic security patches (patch version updates)
+# 2. Allow minor version updates with new features
+# 3. Prevent breaking changes from major version updates
+#
+# To lock to exact versions for reproducible builds, run:
+#   pip freeze > requirements-lock.txt
+#
+# To update all packages to latest compatible versions:
+#   pip install --upgrade -r requirements.txt
+
+# === Installation Notes ===
+
+# For web interface only (with pre-generated CSV files):
+#   No installation needed! Just run: python web_interface.py
+#   The web interface uses only Python standard library.
+
+# For full functionality including Cassandra data extraction:
+#   pip install -r requirements.txt
+
+# For minimal installation (Cassandra extraction only):
+#   pip install "scylla-driver>=3.29.1,<4.0.0"
+
+# For optimal performance (recommended):
+#   pip install "scylla-driver>=3.29.1,<4.0.0" "orjson>=3.10.7,<4.0.0" "psutil>=6.1.0,<7.0.0" "tqdm>=4.67.1,<5.0.0"

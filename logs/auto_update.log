@@ -1,0 +1,27 @@
+2026-03-30 09:45:30,734 - auto_update_visualization - INFO - Loading configuration from auto_update_config.ini
+2026-03-30 09:45:30,735 - auto_update_visualization - INFO - Starting scheduled updates every 5 minutes
+2026-03-30 09:45:30,735 - auto_update_visualization - INFO - Running scheduled update
+2026-03-30 09:45:30,735 - auto_update_visualization - INFO - Starting data extraction from Cassandra
+2026-03-30 09:45:30,742 - auto_update_visualization - INFO - Auto-detected environment: in_pod=False, has_oc=True, using shell script
+2026-03-30 09:45:30,742 - auto_update_visualization - INFO - Using namespace from config: namespacenoi
+2026-03-30 09:45:30,742 - auto_update_visualization - INFO - Using release name from config: releasename:evtmanager
+2026-03-30 09:45:30,742 - auto_update_visualization - INFO - Executing command: ./copy_policies_details_from_cassandra.sh --namespace namespacenoi --release releasename:evtmanager
+2026-03-30 09:45:33,886 - auto_update_visualization - ERROR - Data extraction failed: Command '['./copy_policies_details_from_cassandra.sh', '--namespace', 'namespacenoi', '--release', 'releasename:evtmanager']' returned non-zero exit status 1.
+2026-03-30 09:45:33,886 - auto_update_visualization - INFO - Retrying data extraction (attempt 2/3)...
+2026-03-30 09:46:03,892 - auto_update_visualization - INFO - Starting data extraction from Cassandra
+2026-03-30 09:46:03,949 - auto_update_visualization - INFO - Auto-detected environment: in_pod=False, has_oc=True, using shell script
+2026-03-30 09:46:03,949 - auto_update_visualization - INFO - Using namespace from config: namespacenoi
+2026-03-30 09:46:03,949 - auto_update_visualization - INFO - Using release name from config: releasename:evtmanager
+2026-03-30 09:46:03,949 - auto_update_visualization - INFO - Executing command: ./copy_policies_details_from_cassandra.sh --namespace namespacenoi --release releasename:evtmanager
+2026-03-30 09:46:07,431 - auto_update_visualization - ERROR - Data extraction failed: Command '['./copy_policies_details_from_cassandra.sh', '--namespace', 'namespacenoi', '--release', 'releasename:evtmanager']' returned non-zero exit status 1.
+2026-03-30 09:46:07,432 - auto_update_visualization - INFO - Retrying data extraction (attempt 3/3)...
+2026-03-30 09:46:37,439 - auto_update_visualization - INFO - Starting data extraction from Cassandra
+2026-03-30 09:46:37,447 - auto_update_visualization - INFO - Auto-detected environment: in_pod=False, has_oc=True, using shell script
+2026-03-30 09:46:37,448 - auto_update_visualization - INFO - Using namespace from config: namespacenoi
+2026-03-30 09:46:37,448 - auto_update_visualization - INFO - Using release name from config: releasename:evtmanager
+2026-03-30 09:46:37,448 - auto_update_visualization - INFO - Executing command: ./copy_policies_details_from_cassandra.sh --namespace namespacenoi --release releasename:evtmanager
+2026-03-30 09:46:40,814 - auto_update_visualization - ERROR - Data extraction failed: Command '['./copy_policies_details_from_cassandra.sh', '--namespace', 'namespacenoi', '--release', 'releasename:evtmanager']' returned non-zero exit status 1.
+2026-03-30 09:46:40,816 - auto_update_visualization - INFO - Writing change notification to directory: output
+2026-03-30 09:46:40,816 - auto_update_visualization - INFO - Wrote change notification to output/data_updated.signal
+2026-03-30 09:46:40,816 - auto_update_visualization - INFO - Notification [error]: Data extraction from Cassandra failed
+2026-03-30 09:46:40,817 - auto_update_visualization - INFO - Next update scheduled for 2026-03-30 09:51:40

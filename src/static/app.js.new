@@ -1,0 +1,778 @@
+// static/app.js
+// Server-side DataTables UI with:
+// - Pretty JSON toggle
+// - Drag resizers (left/right + events/payload)
+// - Policy selection (checkboxes, select-all per page, Export Selected, Deploy Selected)
+// - Deploy cache (frontend-only via localStorage) that overrides Deployed → Yes styling,
+//   persists across sessions, and can be cleared from the UI.
+// - Temporal Grouping (related-events) vs Temporal Patterns (hierarchy view)
+// - Auto-update mechanism that clears client-side caches when new data is loaded
+
+// ------- Deploy Configuration Parameters -------
+/**
+ * Maximum number of policy IDs to include in a single deploy request.
+ * Smaller batches process faster but create more network overhead.
+ * @type {number}
+ * @default 50
+ */
+const DEPLOY_BATCH_SIZE = 50;
+
+// ---- Update watcher (poll /api/last_update) ----
+let __lastSeenVersion = +(localStorage.getItem('last_seen_version') || 0);
+let __updateBannerVisible = false;
+let __updatePollTimer = null;
+const LS_AUTO_REFRESH = 'auto_refresh_enabled';
+const DEFAULT_WATCH_INTERVAL_MS = 15000;
+let __updateReq = null;  // track inflight poll
+/**
+ * Maximum number of concurrent deploy requests.
+ * Balances throughput against server load and browser resources.
+ * @type {number}
+ * @default 3
+ */
+const DEPLOY_MAX_INFLIGHT = 3;
+/**
+ * Number of policies to process concurrently on the backend per batch.
+ * Higher values increase server-side parallelism but may impact stability.
+ * @type {number}
+ * @default 8
+ */
+const DEPLOY_CONCURRENCY_PER_BATCH = 8;
+
+/**
+ * Client-side timeout for each deploy request in milliseconds.
+ * Prevents UI from hanging indefinitely on network issues.
+ * @type {number}
+ * @default 120000 (2 minutes)
+ */
+const DEPLOY_REQUEST_TIMEOUT_MS = 120000;
+// Selection state reset gate for the next refresh
+/**
+ * Flag to prevent selection restoration after table refresh
+ * @type {boolean}
+ */
+var __suppressRestoreSelection = false;
+
+/**
+ * Maximum number of policies that can be selected for deployment at once.
+ * Prevents excessive server load and potential timeouts.
+ * @type {number}
+ * @default 20
+ */
+const MAX_DEPLOY_SELECTION = 20;
+
+/**
+ * Tracks whether the user has been notified about exceeding selection limit
+ * @type {boolean}
+ */
+let __overCapNotified = false;
+
+var policyTable, eventsTable, selectedPolicyId = null;
+var __columnWidths__ = {};
+var __policiesFirstLoadHandled = false;
+
+// Selection state
+var selectedPolicies = new Set();
+var selectedPolicyStates = new Map(); // id -> deployed? (bool)
+
+// Payload state
+var payloadRaw = null, payloadPretty = null, payloadSuffix = "";
+
+// Layout splits
+var LEFT_SPLIT = +localStorage.getItem('leftSplit') || (5 / 13);
+var RIGHT_SPLIT = +localStorage.getItem('rightSplit') || 0.25;
+var MAIN_RESIZER_THICKNESS = 8;
+var RESIZER_THICKNESS = 8;
+
+// ---- Deploy cache (frontend-only) ----
+const LS_DEPLOY_CACHE_KEY = 'deploy_cache_ids';
+var overrideDeployed = new Set(); // IDs known deployed by client (from cache or recent success)
+
+function autoRefreshEnabled() {
+  try { return localStorage.getItem(LS_AUTO_REFRESH) === '1'; } catch (_) { return false; }
+}
+function setAutoRefreshEnabled(on) {
+  try { localStorage.setItem(LS_AUTO_REFRESH, on ? '1' : '0'); } catch (_){}
+  $('#auto-refresh').prop('checked', !!on);
+}
+
+function ensureAutoRefreshToggle() {
+  if ($('#auto-refresh-wrap').length) return;
+  const $form = $('#registry-form'); if (!$form.length) return;
+
+  const html = `
+    <div id="auto-refresh-wrap" class="form-check form-switch ms-2" title="Automatically refresh tables when new data is available">
+      <input class="form-check-input" type="checkbox" id="auto-refresh">
+      <label class="form-check-label" for="auto-refresh">Auto refresh</label>
+    </div>`;
+  // place it near the group selector / search bar
+  ($form.find('#events-search-wrap').length ? $(html).insertBefore('#events-search-wrap') : $form.append(html));
+
+  // initialize from storage
+  setAutoRefreshEnabled(autoRefreshEnabled());
+
+  $(document).off('change.autoRefresh').on('change.autoRefresh', '#auto-refresh', function () {
+    setAutoRefreshEnabled(this.checked);
+    showNotification(this.checked ? 'Auto refresh enabled' : 'Auto refresh disabled', 'info', 2000);
+  });
+}
+function renderUpdateBanner(onRefreshClick) {
+  if (__updateBannerVisible) return;
+  __updateBannerVisible = true;
+
+  const $banner = $(`
+    <div class="update-notification" id="update-banner">
+      <div class="update-message">
+        <i class="bi bi-arrow-repeat" aria-hidden="true"></i>
+        <span>New data is available.</span>
+      </div>
+      <div style="margin-left:12px; display:flex; gap:8px;">
+        <button id="update-refresh" class="btn btn-sm btn-primary" type="button">Refresh</button>
+        <button id="update-dismiss" class="btn btn-sm btn-outline-secondary" type="button">Dismiss</button>
+      </div>
+    </div>
+  `).appendTo('body');
+
+  $('#update-refresh').on('click', function(){
+    // Clear caches silently before calling the provided refresh function
+    clearDeployCacheSilently().then(() => {
+      if (typeof onRefreshClick === 'function') onRefreshClick();
+      hideUpdateBanner();
+    });
+  });
+  $('#update-dismiss').on('click', hideUpdateBanner);
+}
+
+function hideUpdateBanner() {
+  if (!__updateBannerVisible) return;
+  __updateBannerVisible = false;
+  $('#update-banner').remove();
+}
+function pickVersion(d) {
+  if (!d || typeof d !== 'object') return 0;
+  // Prefer server-provided version (mtime or computed)
+  let v = Number(d.version || 0);
+  if (!v && d.last_update_iso) {
+    const t = Date.parse(d.last_update_iso);
+    if (!isNaN(t)) v = Math.max(v, Math.floor(t / 1000));
+  }
+  if (!v && d.last_update) {                  // if server kept your original key
+    const t = Date.parse(d.last_update);
+    if (!isNaN(t)) v = Math.max(v, Math.floor(t / 1000));
+  }
+  if (!v && d.update_count != null) {
+    v = Math.max(v, Number(d.update_count) || 0);
+  }
+  return v || 0;
+}
+
+
+function startUpdateWatcher(intervalMs = 306000) {
+  if (__updatePollTimer) clearInterval(__updatePollTimer);
+
+  const check = () => {
+    if (__updateReq) return;  // don't overlap polls
+    __updateReq = fetch('/api/last_update', { cache: 'no-store' })
+      .then(r => r.ok ? r.json() : null)
+      .then(d => {
+        const ver = pickVersion(d);
+        if (ver && ver > __lastSeenVersion) {
+          if (autoRefreshEnabled()) {
+            // Clear caches silently first, then refresh data
+            clearDeployCacheSilently().then(() => {
+              softRefreshData();
+              markUpdateSeen(ver);
+              showNotification('Data updated • tables refreshed', 'success', 2500);
+            });
+          } else {
+            renderUpdateBanner(() => {
+              softRefreshData();
+              markUpdateSeen(ver);
+            });
+          }
+        }
+      })
+      .catch(() => {})
+      .finally(() => { __updateReq = null; });
+  };
+
+  check();
+  __updatePollTimer = setInterval(check, intervalMs);
+}
+
+
+function markUpdateSeen(version) {
+  __lastSeenVersion = Number(version) || 0;
+  try { localStorage.setItem('last_seen_version', String(__lastSeenVersion)); } catch(e){}
+}
+
+/**
+ * Silently clears both client and server deploy caches without prompts or alerts
+ * Used during auto-updates and manual refreshes
+ */
+function clearDeployCacheSilently() {
+  // Clear client-side cache immediately
+  overrideDeployed.clear();
+  updateClearCacheButton();
+  
+  // Clear server-side cache
+  return fetch('/api/deploy_cache', { method: 'DELETE' })
+    .then(() => {
+      // Ensure client cache is cleared again after server response
+      overrideDeployed.clear();
+      updateClearCacheButton();
+      return true;
+    })
+    .catch(() => {
+      // Even if server cache clear fails, ensure client cache is cleared
+      overrideDeployed.clear();
+      updateClearCacheButton();
+      return false;
+    });
+}
+
+// "Soft" refresh without full page reload
+function softRefreshData() {
+  // Clear both client and server caches silently
+  clearDeployCacheSilently();
+
+  fetch('/api/last_update', { cache: 'no-store' })
+    .then(r => r.ok ? r.json() : null)
+    .then(d => markUpdateSeen(pickVersion(d)))
+    .catch(()=>{});
+
+  if (window.policyTable) policyTable.ajax.reload(null, false);
+  if (isPatternsMode()) {
+    if (window.selectedPolicyId) loadPatternDetailsForPolicy(selectedPolicyId);
+  } else {
+    if (window.eventsTable) eventsTable.ajax.reload(null, true);
+    else ensureEventsTable();
+  }
+}
+
+
+// ---- Simple notification system ----
+function showNotification(message, type = 'info', duration = 3000, actionButton = null) {
+  $('#notification-container').remove();
+  const $container = $('<div id="notification-container"></div>').appendTo('body');
+  
+  let notificationHtml = '<div class="notification notification-' + type + '">' +
+    '<span class="notification-message">' + message + '</span>';
+  
+  // Add action button if provided
+  if (actionButton && actionButton.text && actionButton.callback) {
+    notificationHtml += '<button class="notification-action btn btn-sm btn-' +
+      (actionButton.style || 'light') + ' ms-2">' + actionButton.text + '</button>';
+  }
+  
+  notificationHtml += '</div>';
+  const $notification = $(notificationHtml).appendTo($container);
+  
+  // Attach action button callback if provided
+  if (actionButton && actionButton.callback) {
+    $notification.find('.notification-action').on('click', function(e) {
+      e.preventDefault();
+      actionButton.callback();
+      // Don't auto-dismiss if callback is triggered
+      if (actionButton.keepOpen !== true) {
+        $notification.removeClass('show');
+        setTimeout(() => $notification.remove(), 300);
+      }
+    });
+  }
+  
+  setTimeout(() => $notification.addClass('show'), 10);
+  if (duration > 0) {
+    setTimeout(() => {
+      $notification.removeClass('show');
+      setTimeout(() => $notification.remove(), 300);
+    }, duration);
+  }
+  return $notification;
+}
+
+function clearDeployCache() {
+  overrideDeployed.clear();
+  try { localStorage.removeItem(LS_DEPLOY_CACHE_KEY); } catch (e) { }
+  if (policyTable) policyTable.ajax.reload(null, false);
+  updateClearCacheButton();
+}
+
+function updateClearCacheButton() {
+  const hasCache = overrideDeployed.size > 0;
+  const $btn = $('#clear-deploy-cache');
+  if ($btn.length === 0) return;
+  $btn.find('.cache-badge').text(overrideDeployed.size || 0);
+  $btn
+    .prop('disabled', !hasCache)
+    .toggleClass('btn-outline-secondary', !hasCache)
+    .toggleClass('btn-warning', hasCache)
+    .attr('title', hasCache
+      ? 'Clear cached deployed policy IDs (UI overrides)'
+      : 'No cached deployed IDs');
+}
+
+// ---- Injected styles ----
+function ensureDeployedStyles() {
+  // (kept for symmetry; your deployed styles are controlled via CSS)
+}
+
+// --- neutral, high-contrast tree styles for Pattern Hierarchy (match left table look) ---
+// --- neutral, table-default background; black text; bold nodes + IF lines ---
+(function ensurePatternTreeStyles(){
+  const id = 'pattern-tree-styles';
+  const css = `
+  /* keep DataTables background as-is (no overrides) */
+  #events-table td.tree-cell { padding:10px 12px !important; vertical-align: top; }
+
+  .ptree { font-size:13.5px; line-height:1.45; color:#000; }
+  .ptree ul { list-style:none; margin:6px 0 0 0; padding-left:18px; border-left:1px dashed #b8bfc7; }
+  .ptree li { margin:0; padding:6px 0 0 12px; position:relative; }
+  .ptree .node { display:inline-flex; gap:8px; align-items:baseline; }
+
+  /* plain black text */
+  .ptree .meta { color:#000; }
+
+  /* nodes ("Condition set", "Group …", "Conditions", "Actions", "value/if") */
+  .ptree .badge{
+    display:inline-block; padding:2px 8px; border-radius:9999px;
+    font-size:11.5px; font-weight:700; line-height:1;
+    background:transparent; border:1px solid #c7c9cc; color:#000;
+  }
+
+  /* make ONLY the IF lines' text bold black */
+  .ptree .badge.if + .meta { font-weight:700; color:#000; }
+
+  .ptree .caret { cursor:pointer; user-select:none; font-weight:800; margin-right:6px; color:#000; }
+  .ptree .collapsed > ul { display:none; }
+  `;
+  $('#'+id).remove();
+  $('<style/>',{ id, text: css }).appendTo(document.head || document.body);
+})();
+
+// Add styles for notification action buttons
+(function ensureNotificationActionStyles(){
+  const id = 'notification-action-styles';
+  const css = `
+  .notification {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+  }
+  
+  .notification-action {
+    white-space: nowrap;
+    margin-left: 12px;
+    font-size: 0.85rem;
+    padding: 2px 8px;
+  }
+  
+  #notification-container {
+    z-index: 9999;
+    max-width: 90%;
+    width: 500px;
+  }
+  
+  .notification-info {
+    background-color: rgba(13, 202, 240, 0.2);
+    border-left: 4px solid #0dcaf0;
+  }
+  
+  .notification-success {
+    background-color: rgba(25, 135, 84, 0.2);
+    border-left: 4px solid #198754;
+  }
+  
+  .notification-warning {
+    background-color: rgba(255, 193, 7, 0.2);
+    border-left: 4px solid #ffc107;
+  }
+  
+  .notification-error {
+    background-color: rgba(220, 53, 69, 0.2);
+    border-left: 4px solid #dc3545;
+  }
+  `;
+  $('#'+id).remove();
+  $('<style/>',{ id, text: css }).appendTo(document.head || document.body);
+})();
+
+// Add styles for progress bars
+(function ensureProgressBarStyles(){
+  const id = 'progress-bar-styles';
+  const css = `
+  .loading-progress-bar {
+    height: 4px;
+    background-color: #e9ecef;
+    border-radius: 2px;
+    margin-top: 4px;
+    overflow: hidden;
+  }
+  
+  .loading-progress-bar .progress {
+    height: 100%;
+    background-color: #0dcaf0;
+    width: 0%;
+    transition: width 0.3s ease;
+  }
+  
+  .loading-status {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.8rem;
+    margin-top: 2px;
+  }
+  `;
+  $('#'+id).remove();
+  $('<style/>',{ id, text: css }).appendTo(document.head || document.body);
+})();
+
+// Add styles for loading indicators
+(function ensureLoadingStyles(){
+  const id = 'loading-indicator-styles';
+  const css = `
+  #policies-loading-info,
+  #events-loading-info {
+    position: relative;
+    margin-bottom: 8px;
+    font-size: 0.85rem;
+    border-left: 3px solid #0dcaf0;
+    background-color: rgba(13, 202, 240, 0.1);
+    transition: opacity 0.3s ease;
+    padding: 8px 12px;
+    border-radius: 4px;
+  }
+  
+  #policies-loading-info .bi-info-circle,
+  #events-loading-info .bi-info-circle {
+    margin-right: 4px;
+    color: #0dcaf0;
+  }
+  
+  .loaded-count, .total-count {
+    font-weight: bold;
+  }
+  
+  .load-more-btn {
+    transition: all 0.2s ease;
+  }
+  
+  .load-more-btn:hover {
+    transform: translateY(-1px);
+    box-shadow: 0 2px 5px rgba(0,0,0,0.1);
+  }
+  
+  .loading-progress-bar {
+    height: 6px;
+    background-color: rgba(233, 236, 239, 0.5);
+    border-radius: 3px;
+    margin: 6px 0;
+    overflow: hidden;
+  }
+  
+  .loading-progress-bar .progress {
+    height: 100%;
+    background-color: #0dcaf0;
+    width: 0%;
+    transition: width 0.5s ease;
+    border-radius: 3px;
+  }
+  
+  .loading-status {
+    display: flex;
+    justify-content: space-between;
+    font-size: 0.8rem;
+    color: #6c757d;
+  }
+  `;
+  $('#'+id).remove();
+  $('<style/>',{ id, text: css }).appendTo(document.head || document.body);
+})();
+
+
+$(function () {
+  ensureDeployedStyles();
+  installGlobalSearchHandler();
+
+  fetch('/api/deploy_cache')
+    .then(r => r.json())
+    .then(d => {
+      const ids = (d && Array.isArray(d.ids)) ? d.ids : [];
+      overrideDeployed = new Set(ids.map(String));
+    })
+    .catch(() => { overrideDeployed = new Set(); })
+    .finally(() => {
+      ensurePrettySwitch();
+      ensurePolicyButtons();
+      ensureGroupSelector();
+      ensureAutoRefreshToggle();
+      updateActionButtons();
+      updateClearCacheButton();
+      installRightResizer();
+      initPolicies();
+      setupResizeButtons();
+      applyDefaultColumns();
+      installMainResizer();
+      applyLeftRightWidths();
+      $('.container-fluid .row.mt-3').addClass('two-pane-nowrap');
+    });
+
+  // Auto-select 1st policy (when no global search), else load global events table
+  $('#policy-table').on('xhr.dt', function () {
+    if (__policiesFirstLoadHandled) return;
+    __policiesFirstLoadHandled = true;
+    const term = ($('#events-global-search').val() || '').trim();
+    if (!term) {
+      const first = policyTable.row(0).data();
+      if (first && first.policy_id) {
+        selectedPolicyId = first.policy_id;
+        $('#selected-policy').text(selectedPolicyId);
+        $('#policy-table tbody tr:eq(0)').addClass('selected-row');
+        if (!isPatternsMode()) ensureEventsTable();
+      }
+    } else {
+      selectedPolicyId = null;
+      $('#selected-policy').text('None');
+      if (!eventsTable) ensureEventsTable(); else eventsTable.ajax.reload(null, true);
+    }
+    requestAnimationFrame(layoutHeights);
+  });
+
+  // Pretty toggle
+  $(document).on('change', '#pretty-json', renderPayload);
+
+  // Resize
+  let raf;
+  $(window).on('resize', function () {
+    cancelAnimationFrame(raf);
+    raf = requestAnimationFrame(layoutHeights);
+  });
+  
+  // Add keyboard shortcut (Alt+M) to toggle between modes
+  $(document).on('keydown', function(e) {
+    // Alt+M to toggle between modes
+    if (e.altKey && e.key === 'm') {
+      const $selector = $('#group-selector');
+      if ($selector.length) {
+        const currentValue = $selector.val();
+        const newValue = currentValue === 'related-events' ?
+          'analytics.temporal-patterns' : 'related-events';
+        
+        $selector.val(newValue).trigger('change');
+        
+        showNotification(
+          `Switched to ${newValue === 'related-events' ? 'Temporal Grouping' : 'Temporal Patterns'} mode`,
+          'info',
+          2000
+        );
+      }
+    }
+  });
+
+  // Export
+  $(document).on('click', '#export-selected-policies', function () {
+    if (selectedPolicies.size === 0) { alert('No policies selected.'); return; }
+    const arr = Array.from(selectedPolicies).sort();
+    const blob = new Blob([arr.join('\n')], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = 'selected_policies_' + new Date().toISOString().replace(/[:.]/g, '-') + '.txt';
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 0);
+  });
+
+  // Clear Deploy Cache (server-side file)
+  $(document).on('click', '#clear-deploy-cache', function () {
+    if (!confirm('This will clear the server cache file used to override Deployed=Yes.\n\nProceed?')) return;
+    
+    // Use our shared function for the core functionality
+    clearDeployCacheSilently()
+      .then(success => {
+        if (policyTable) policyTable.ajax.reload(null, false);
+        alert('Server deploy cache cleared.\n\nReload policies_export.csv to reflect upstream truth.');
+      })
+      .catch(() => alert('Failed to clear server cache'));
+  });
+
+  // Deploy flow
+  $(document).on('click', '#deploy-selected-policies', async function () {
+    refreshSelectedStatesFromVisiblePage();
+
+    if (selectedPolicies.size === 0) {
+      alert('No policies selected.\n\nSelect at least one UNDEPLOYED policy to deploy.');
+      return;
+    }
+    const n = selectedPolicies.size || 0;
+    if (n > MAX_DEPLOY_SELECTION) {
+      alert(`You selected ${n} policies.\n\nMax per deploy is ${MAX_DEPLOY_SELECTION}.\nPlease reduce your selection and try again.`);
+      return;
+    }
+
+    const all = Array.from(selectedPolicies);
+    const deployed = [], undeployed = [], unknown = [];
+    all.forEach(id => {
+      if (!selectedPolicyStates.has(id)) unknown.push(id);
+      else if (selectedPolicyStates.get(id)) deployed.push(id);
+      else undeployed.push(id);
+    });
+
+    if (undeployed.length === 0) {
+      let msg = 'All selected policies are already deployed.\n\nUncheck these:\n' +
+        (deployed.length ? '\n' + deployed.join('\n') : '\n— none —');
+      if (unknown.length) msg += '\n\nStatus unknown (off-page):\n' + unknown.join('\n');
+      alert(msg);
+      return;
+    }
+
+    if (deployed.length) {
+      alert('These policies are already deployed and will be skipped:\n\n' +
+        deployed.join('\n') +
+        (unknown.length ? '\n\nStatus unknown (off-page):\n' + unknown.join('\n') : ''));
+    }
+
+    const baseUrl = ($('#registry-url').val() || '').trim();
+    const user = ($('#registry-username').val() || '').trim();
+    const pass = $('#registry-password').val() || '';
+
+    if (!baseUrl) { alert('Registry URL is required.'); return; }
+    if (!user && !pass) {
+      if (!confirm('No username/password provided.\n\nProceed without authentication?')) return;
+    }
+
+    const $btn = $('#deploy-selected-policies').prop('disabled', true).text('Deploying…');
+
+    try {
+      const results = await deployPoliciesBatched(undeployed, { url: baseUrl, user, pass });
+
+      if (results.urls) {
+        console.group('Deploy request URLs');
+        Object.entries(results.urls).forEach(([id, url]) => console.log(id, '→', url));
+        console.groupEnd();
+      }
+
+      results.ok.forEach(id => {
+        id = String(id);
+        overrideDeployed.add(id);
+        selectedPolicyStates.set(id, true);
+        selectedPolicies.delete(id);
+      });
+
+      fetch('/api/deploy_cache', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: results.ok })
+      }).catch(() => { });
+
+      updateClearCacheButton();
+      updateActionButtons();
+
+      clearAllSelectionsUI();
+      __suppressRestoreSelection = true;
+
+      if (policyTable) {
+        policyTable.ajax.reload(function () {
+          restoreSelectionAfterRefresh();
+        }, false);
+      }
+
+      const okCount = results.ok.length;
+      const failCount = results.fail.length;
+      if (okCount > 0 && failCount === 0) {
+        showNotification(`Successfully deployed ${okCount} policies`, 'success', 5000);
+      } else if (okCount > 0 && failCount > 0) {
+        showNotification(`Deployed ${okCount} policies, ${failCount} failed`, 'warning', 5000);
+      } else if (okCount === 0 && failCount > 0) {
+        showNotification(`Failed to deploy ${failCount} policies`, 'error', 5000);
+      }
+
+      let msg = 'Deploy completed.\n\n' +
+        'Succeeded: ' + okCount + '\n' +
+        'Failed:    ' + failCount;
+
+      if (failCount) {
+        const list = results.fail.slice(0, 25).map(e =>
+          `${e.id} [${e.status}]${e.error ? ' - ' + e.error : ''}`
+        ).join('\n');
+        msg += '\n\nFailures (up to 25):\n' + list;
+      }
+
+      msg += '\n\nNext steps:\n' +
+        '1) Reload policies_export.csv so the upstream data reflects new states.\n' +
+        '2) After reloading, clear the local deploy cache (click "Clear Deploy Cache") to avoid stale UI overrides.';
+
+      alert(msg);
+    } catch (e) {
+      console.error(e);
+      showNotification('Deploy failed: ' + (e && e.message ? e.message : e), 'error', 5000);
+      alert('Deploy failed: ' + (e && e.message ? e.message : e));
+    } finally {
+      $btn.prop('disabled', false).text('Deploy Selected');
+    }
+  });
+
+  // Persist registry fields + add global event search input
+  (function ensureRegistryFields() {
+    $('#registry-url').val(localStorage.getItem('registry_url') || '');
+    $('#registry-username').val(localStorage.getItem('registry_user') || '');
+    $('#registry-password').val(localStorage.getItem('registry_pass') || '');
+    $(document).on('input change', '#registry-url', function () { localStorage.setItem('registry_url', this.value.trim()); });
+    $(document).on('input change', '#registry-username', function () { localStorage.setItem('registry_user', this.value.trim()); });
+    $(document).on('input change', '#registry-password', function () { localStorage.setItem('registry_pass', this.value); });
+
+    if ($('#events-global-search').length === 0) {
+      const $form = $('#registry-form');
+      if ($form.length) {
+        const html =
+          '<div id="events-search-wrap" style="margin-left:auto; display:flex;">' +
+          '<input type="text" id="events-global-search" ' +
+          'class="form-control form-control-sm" ' +
+          'placeholder="Search all events…" style="width:360px">' +
+          '</div>';
+        $form.append(html);
+      }
+    }
+  })();
+
+
+fetch('/api/last_update', { cache: 'no-store' })
+  .then(r => r.ok ? r.json() : null)
+  .then(d => {
+    const ver = pickVersion(d);
+    if (ver) markUpdateSeen(ver);
+  })
+  .finally(() => startUpdateWatcher(15000));
+
+
+});
+
+/* -------------------- Policies -------------------- */
+
+function ensureEventsModeUI() {
+  rebuildEventsTheadForEventsMode();
+  $('#events-container .card-header h2').text('Event Details');
+  $('#payload-container .card-header h3').text('Event Payload');
+  $('#toggle-details').show();
+  showPayloadPane(true);
+  if (policyTable) policyTable.columns([2, 3]).visible(true, false);
+}
+
+function rebuildEventsTheadForEventsMode() {
+  if ($.fn.DataTable.isDataTable('#events-table')) {
+    $('#events-table').DataTable().clear().destroy();
+  }
+  $('#events-table thead')
+    .empty()
+    .append(
+      '<tr>' +
+      '<th>Event ID</th>' +
+      '<th>Severity</th>' +
+      '<th>Resource</th>' +
+      '<th>Summary</th>' +
+      '<th class="details-col">Details</th>' +
+      '<th class="type-details-col">Type</th>' +
+      '</tr>'
+    );
+  $('#events-table tbody').empty();
+}
+
+/* ----------------

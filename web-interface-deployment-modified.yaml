@@ -1,0 +1,183 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: evtmanager-ibm-ea-web-interface
+  namespace: namespacenoi
+  labels:
+    app.kubernetes.io/component: web-interface
+    app.kubernetes.io/instance: evtmanager
+    app.kubernetes.io/name: ibm-ea-web-interface
+    component: web-interface
+    release: evtmanager
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/component: web-interface
+      app.kubernetes.io/instance: evtmanager
+      app.kubernetes.io/name: ibm-ea-web-interface
+  strategy:
+    rollingUpdate:
+      maxSurge: 25%
+      maxUnavailable: 25%
+    type: RollingUpdate
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/component: web-interface
+        app.kubernetes.io/instance: evtmanager
+        app.kubernetes.io/name: ibm-ea-web-interface
+        release: evtmanager
+    spec:
+      initContainers:
+      - name: copy-files
+        image: cp.icr.io/cp/noi/ea-mime-classification-service@sha256:c358d405cb18283873a4f7e92225898250ab9509225df8068e1d8c4b1de693fb
+        command: ["sh", "-c"]
+        args: ["mkdir -p /opt/app/logs /opt/app/output /opt/app/cert /opt/app/static /opt/app/config && echo 'Files will be copied by the setup script'"]
+        volumeMounts:
+        - name: shared-data
+          mountPath: /opt/app
+      containers:
+      # Note: OCP deployment uses the MIME classification service image which includes Python 3.11
+      # This image provides the runtime environment for the web interface and auto-update scripts
+      - name: auto-update
+        image: cp.icr.io/cp/noi/ea-mime-classification-service@sha256:c358d405cb18283873a4f7e92225898250ab9509225df8068e1d8c4b1de693fb
+        imagePullPolicy: Always
+        command: ["sh", "-c"]
+        args: ["mkdir -p /opt/app/logs && cd /opt/app && echo 'Waiting for required files for auto-update...' && while [ ! -f auto_update_visualization.py ] || [ ! -f auto_update_config.ini ] || [ ! -f mime_cassandra_util.py ] || [ ! -f copy_policies_details_from_cassandra.py ] || [ ! -f process_policies_and_events.py ]; do echo 'Waiting for auto-update files to be copied...'; sleep 5; done && echo 'Starting auto_update_visualization.py...' && python3 auto_update_visualization.py > /opt/app/logs/auto_update.log 2>&1"]
+        env:
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        - name: CASSANDRA_HOST
+          value: evtmanager-cassandra
+        - name: CASSANDRA_PORT
+          value: "9042"
+        - name: CASSANDRA_CLIENT_USERNAME_PATH
+          value: /opt/cassandraAuth/username
+        - name: CASSANDRA_CLIENT_PASSWORD_PATH
+          value: /opt/cassandraAuth/password
+        resources:
+          limits:
+            cpu: "2"
+            memory: 2048Mi
+          requests:
+            cpu: 200m
+            memory: 1024Mi
+        volumeMounts:
+        - name: shared-data
+          mountPath: /opt/app
+        - name: config-volume
+          mountPath: /opt/app/config
+        - name: cassandra-auth
+          mountPath: /opt/cassandraAuth
+      - name: web-interface
+        image: cp.icr.io/cp/noi/ea-mime-classification-service@sha256:c358d405cb18283873a4f7e92225898250ab9509225df8068e1d8c4b1de693fb
+        imagePullPolicy: Always
+        command: ["sh", "-c"]
+        args: ["cd /opt/app && echo 'Waiting for required files...' && while [ ! -f web_interface.py ] || [ ! -f /opt/app/config/web_interface_config.ini ]; do echo 'Waiting for required files to be copied...'; if [ ! -f web_interface.py ]; then echo '- Missing web_interface.py'; fi; if [ ! -f /opt/app/config/web_interface_config.ini ]; then echo '- Missing config file'; fi; sleep 5; done && echo 'All required files found, starting application...' && python3 web_interface.py --config /opt/app/config/web_interface_config.ini"]
+        ports:
+        - containerPort: 5000
+          name: http
+          protocol: TCP
+        env:
+        - name: PYTHONUNBUFFERED
+          value: "1"
+        - name: ACCESS_LOG
+          value: "1"
+        - name: ENABLE_AUTH
+          value: "1"
+        - name: ENABLE_CORS
+          value: "1"
+        - name: CORS_ORIGINS
+          value: "*"
+        - name: CASSANDRA_HOST
+          value: evtmanager-cassandra
+        - name: CASSANDRA_PORT
+          value: "9042"
+        - name: CASSANDRA_CLIENT_USERNAME_PATH
+          value: /opt/cassandraAuth/username
+        - name: CASSANDRA_CLIENT_PASSWORD_PATH
+          value: /opt/cassandraAuth/password
+        resources:
+          limits:
+            cpu: "2.5"
+            memory: 3072Mi
+          requests:
+            cpu: 300m
+            memory: 1536Mi
+        volumeMounts:
+        - name: shared-data
+          mountPath: /opt/app
+        - name: config-volume
+          mountPath: /opt/app/config
+        - name: cassandra-auth
+          mountPath: /opt/cassandraAuth
+      volumes:
+      - name: shared-data
+        emptyDir: {}
+      - name: config-volume
+        configMap:
+          name: web-interface-config
+      - name: cassandra-auth
+        secret:
+          secretName: evtmanager-cassandra-auth-secret
+      imagePullSecrets:
+      - name: noi-registry-secret
+      serviceAccount: noi-service-account
+      serviceAccountName: noi-service-account
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: web-interface-config
+  namespace: namespacenoi
+data:
+  web_interface_config.ini: |
+    [general]
+    port = 5000
+    bind_address = 0.0.0.0
+    output_dir = /opt/app/output
+    use_sqlite = false
+    sqlite_path = /opt/app/output/policy_events.db
+    event_instances = event_instances_export.csv
+    access_log = true
+    debug_timing = false
+    
+    [security]
+    enable_cors = true
+    cors_origins = *
+    enable_auth = true
+    force_login_page = false
+    users_file = /opt/app/users.csv
+    session_timeout = 30
+    enable_audit = true
+    audit_log_file = /opt/app/logs/audit.log
+    max_log_size = 10485760
+    backup_count = 5
+    enable_https = false
+    ssl_cert_file = /opt/app/cert/cert.pem
+    ssl_key_file = /opt/app/cert/key.pem
+    username = admin
+    password = changeme
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: evtmanager-ibm-ea-web-interface
+  namespace: namespacenoi
+  labels:
+    app.kubernetes.io/component: web-interface
+    app.kubernetes.io/instance: evtmanager
+    app.kubernetes.io/name: ibm-ea-web-interface
+spec:
+  ports:
+  - name: http
+    port: 5000
+    protocol: TCP
+    targetPort: 5000
+  selector:
+    app.kubernetes.io/component: web-interface
+    app.kubernetes.io/instance: evtmanager
+    app.kubernetes.io/name: ibm-ea-web-interface
+  type: ClusterIP
+

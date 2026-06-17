@@ -1,0 +1,736 @@
+/*
+ * Copyright IBM Corp. 2024 - 2026
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* CSS Variables */
+:root {
+  /* Typography */
+  --font-family-base: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+  --font-family-fallback: system-ui, -apple-system, BlinkMacSystemFont, sans-serif;
+  --font-size-base: 0.93rem;
+  --section-header-size: 20px;
+  --section-header-line-height: 1.3;
+  
+  /* Colors */
+  --background-color: #f8f9fa;
+  --text-color: #212529;
+  --card-header-bg: #f1f1f1;
+  --focus-color: #7bb0ff;
+  
+  /* Effects */
+  --card-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+  --transition-speed: 0.2s;
+  
+  /* Spacing */
+  --card-margin: 1rem;
+  --card-padding: 0.75rem 1rem;
+}
+
+/* Dark mode support */
+@media (prefers-color-scheme: dark) {
+  :root {
+    --background-color: #212529;
+    --text-color: #f8f9fa;
+    --card-header-bg: #343a40;
+    --focus-color: #90caf9;
+    --card-shadow: 0 4px 6px rgba(0, 0, 0, 0.3);
+  }
+}
+
+/* Main Styles */
+html, body { height: 100%; }
+
+body {
+  font-family: var(--font-family-base), var(--font-family-fallback);
+  background-color: var(--background-color);
+  color: var(--text-color);
+  font-size: var(--font-size-base); /* slightly smaller font */
+  text-rendering: optimizeSpeed; /* Performance optimization */
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+/* Optimize font loading with font-display */
+@font-face {
+  font-family: 'Segoe UI';
+  font-display: swap; /* Improves perceived performance */
+}
+
+/* Make section headers smaller - using CSS variables for consistency */
+/* More efficient selectors - avoid unnecessary nesting */
+.card-header h2,
+.card-header h3 {
+  font-size: var(--section-header-size);
+  line-height: var(--section-header-line-height);
+  margin-bottom: 0; /* Remove bottom margin for better spacing */
+  font-weight: 500; /* Slightly lighter than default for better hierarchy */
+}
+
+/* Add print styles for better document printing */
+@media print {
+  .card-header h2,
+  .card-header h3 {
+    font-size: 16px; /* Smaller font for print */
+    color: #000; /* Ensure good contrast in print */
+  }
+}
+
+/* Support high contrast mode for accessibility */
+@media (prefers-contrast: high) {
+  .card-header {
+    border: 1px solid #000;
+  }
+  
+  .card-header h2,
+  .card-header h3 {
+    color: #000;
+  }
+}
+
+/* Create a reusable class for section headers */
+.section-header {
+  font-size: var(--section-header-size);
+  line-height: var(--section-header-line-height);
+}
+/* Make the registry form span the row so the search can sit at the far right */
+#registry-form {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  width: 100%;           /* critical: lets margin-left:auto work */
+}
+
+/* Push the search input group to the far right */
+#events-search-wrap {
+  margin-left: auto;
+}
+
+/* No auto-margin on the input itself now that we use a wrapper */
+#events-global-search {
+  margin-left: 0;
+}
+
+/* Card styling with variables for consistency */
+.card {
+  box-shadow: var(--card-shadow);
+  margin-bottom: var(--card-margin);
+  transition: box-shadow var(--transition-speed) ease;
+  contain: content; /* Performance optimization - isolates layout */
+  will-change: box-shadow; /* Performance hint for animations */
+  border-radius: 4px; /* Consistent rounded corners */
+  overflow: hidden; /* Ensure content doesn't break radius */
+}
+
+/* Add subtle hover effect for interactive cards */
+.card:hover {
+  box-shadow: 0 6px 8px rgba(0, 0, 0, 0.15);
+}
+
+.card-header {
+  background-color: var(--card-header-bg);
+  padding: var(--card-padding);
+  border-bottom: 1px solid rgba(0, 0, 0, 0.125);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+/* Improve accessibility with focus styles */
+.card:focus-within {
+  outline: 2px solid var(--focus-color);
+  outline-offset: 2px;
+}
+
+/* Reduce motion for users who prefer it */
+@media (prefers-reduced-motion: reduce) {
+  .card {
+    transition: none;
+  }
+}
+
+/* Table Styles */
+/* .table-responsive { overflow-x: auto;  } */
+/* Limit scroll X only to the DataTables scroll wrapper */
+div.dataTables_scrollBody {
+    overflow-x: auto !important;
+}
+
+/* Prevent page-level overflow when tables are wide */
+body, html {
+    overflow-x: hidden;
+}
+#policy-container, #events-container {
+    overflow-x: hidden; /* prevent container scrolling */
+}
+
+#policy-table tbody tr { cursor: pointer; }
+/* #policy-table tbody tr:hover { background-color: #e9ecef; } */
+#policy-table tbody tr:hover { background-color: #adc6f1; }
+#events-table tbody tr { cursor: pointer; }
+#events-table tbody tr:hover { background-color: #adc6f1 !important; ; }
+
+
+/* Force Bootstrap-like zebra striping inside DataTables scroll bodies */
+/*
+#policy-table.table-striped tbody tr.odd > * {
+  background-color: var(--bs-table-striped-bg, rgba(0,0,0,.05)) !important;
+}
+#policy-table.table-striped tbody tr.even > * {
+  background-color: var(--bs-body-bg, #fff) !important;
+}
+
+// Do the same for the Events table (optional but recommended) 
+#events-table.table-striped tbody tr.odd > * {
+  background-color: var(--bs-table-striped-bg, rgba(0,0,0,.05)) !important;
+}
+#events-table.table-striped tbody tr.even > * {
+  background-color: var(--bs-body-bg, #fff) !important;
+}
+*/
+.selected-row { background-color: #cfe2ff !important; }
+
+/* JSON Viewer (payload) */
+.json-viewer {
+  background-color: #f8f9fa;
+  border: 1px solid #dee2e6;
+  border-radius: 4px;
+  padding: 10px;
+
+  /* scroll Y only */
+  overflow-y: auto;
+  overflow-x: hidden;
+
+  /* wrap long lines/tokens */
+  white-space: pre-wrap;       /* keep newlines, allow wrapping */
+  word-break: break-word;      /* break long tokens if needed */
+  overflow-wrap: anywhere;     /* modern fallback for very long strings */
+
+  font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  font-size: 0.85rem;
+  width: 100%;
+}
+
+
+/* Payload area = ~1/4 of right side (independent of HTML structure) */
+#payload-container .card-body { padding-top: 10px; }
+
+/* DataTables: allow resizing and horizontal scroll */
+table.dataTable { table-layout: auto !important; }
+th { position: relative; overflow: hidden; }
+
+.column-resizing { cursor: col-resize !important; user-select: none; }
+.resize-handle {
+  position: absolute; top: 0; right: 0; width: 8px; height: 100%;
+  cursor: col-resize; z-index: 10;
+}
+.resize-handle:hover, .resize-handle:active { background-color: rgba(0, 0, 0, 0.1); }
+
+/* Responsive adjustments */
+@media (max-width: 768px) {
+  #policy-container, #events-container { width: 100%; }
+}
+
+/* Optional vertical scroll helper (kept from your original) */
+.table-responsive { overflow-y: auto; }
+
+
+/* --- Horizontal (left/right) resizer between Policy and Events columns --- */
+#main-resizer{
+  width: 8px;                 /* drag bar thickness */
+  cursor: col-resize;
+  background: transparent;
+  margin: 0 6px;              /* spacing between the columns */
+}
+#main-resizer::after{
+  content:"";
+  display:block;
+  width: 2px;
+  height: calc(100% - 12px);
+  margin: 6px auto;
+  background: #ced4da;        /* light line */
+  border-radius: 1px;
+}
+
+/* nicer drag cursor + disable selection while dragging horizontally */
+body.resizing-x, body.resizing-x * {
+  cursor: col-resize !important;
+  user-select: none !important;
+}
+
+/* Hide the main resizer on small screens where columns stack */
+@media (max-width: 768px) {
+  #main-resizer { display: none; }
+}
+
+
+
+/* --- Vertical resizer between Events and Payload --- */
+#right-resizer{
+  height: 8px;                 /* drag bar thickness */
+  cursor: row-resize;
+  background: transparent;
+  margin: 6px 0;               /* spacing between the cards */
+}
+#right-resizer::after{
+  content:"";
+  display:block;
+  height: 2px;
+  margin: 3px 12px;
+  background: #ced4da;         /* light line */
+  border-radius: 1px;
+}
+
+/* nicer drag cursor + disable selection while dragging */
+body.resizing-y, body.resizing-y * {
+  cursor: row-resize !important;
+  user-select: none !important;
+}
+
+/* the resizer owns the vertical spacing; remove payload top margin */
+#payload-container { margin-top: 0 !important; }
+/* Keep "Show … entries" and our policy search on the same line */
+#policy-table_wrapper .dataTables_length,
+#policy-table_wrapper .policy-length-search {
+  display: inline-flex !important;
+  align-items: center;
+  white-space: nowrap;
+}
+
+#policy-table_wrapper .dataTables_length select {
+  margin: 0 .5rem;
+}
+
+#policy-table_wrapper #policy-search {
+  width: 240px; /* match JS inline style, or remove there and keep it here */
+}
+/* 13-column split for ≥ md screens (Bootstrap row is flex) */
+@media (min-width: 768px) {
+  .col-md-5-13 { flex: 0 0 calc(5 / 13 * 100%); max-width: calc(5 / 13 * 100%); }
+  .col-md-8-13 { flex: 0 0 calc(8 / 13 * 100%); max-width: calc(8 / 13 * 100%); }
+}
+
+/* Keep the two-pane row on one line at ≥ md */
+@media (min-width: 768px) {
+  .two-pane-nowrap { flex-wrap: nowrap !important; }
+}
+
+/* Smaller main page title */
+#page-title {
+  font-size: 1.25rem;   /* ~20px */
+  line-height: 1.3;
+  font-weight: 600;
+}
+
+/* Topbar form sizing */
+#registry-form .form-control {
+  min-height: 30px;
+  padding-top: 3px;
+  padding-bottom: 3px;
+}
+
+/* Wide URL field; compact username/password */
+#registry-form .registry-url { width: 520px; max-width: 100%; }
+#registry-form .registry-user { width: 160px; }
+#registry-form .registry-pass { width: 160px; }
+
+/* Stack neatly on small screens */
+@media (max-width: 768px) {
+  #topbar { gap: .5rem; }
+  #registry-form { width: 100%; }
+  #registry-form .registry-url { width: 100%; }
+}
+#events-container .card { margin-right: 45px; }
+/* Make sure a vertical scrollbar appears when needed in the DT scroll body */
+div.dataTables_scrollBody {
+  overflow-y: auto !important;  /* add this */
+  overflow-x: auto !important;  /* keep horizontal scroll as well */
+}
+#events-global-search {
+  margin-left: auto;
+}
+#registry-form {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+}
+
+/* ============================
+   Accessible Deployed Badges
+   ============================ */
+
+.deployed-yes,
+.deployed-no,
+.deployed-pending {
+  display: inline-flex;
+  align-items: center;
+  font-weight: 600;
+  font-size: 0.78rem;        /* slightly smaller than base text */
+  line-height: 1;
+  padding: 0.1rem 0.45rem;   /* slimmer pill */
+  border-radius: 999px;
+  border: 1px solid transparent;
+  white-space: nowrap;
+}
+
+/* --- YES --- */
+.deployed-yes {
+  color: #0b235a;             /* dark navy text */
+  background-color: #cfe2ff;  /* light blue background */
+  border-color: #9ec5fe;
+}
+.deployed-yes::before {
+  content: "✓";
+  font-weight: 700;
+  margin-right: 0.25rem;
+}
+
+/* --- NO --- */
+.deployed-no {
+  color: #1f2328;             /* near-black text */
+  background-color: #e5e7eb;  /* neutral gray */
+  border-color: #cbd5e1;
+}
+.deployed-no::before {
+  content: "✕";
+  font-weight: 700;
+  margin-right: 0.25rem;
+}
+
+/* --- Pending / Unknown --- */
+.deployed-pending {
+  color: #1a1a1a;
+  background-color: #ffe8b5;  /* amber background */
+  border-color: #ffd37a;
+}
+.deployed-pending::before {
+  content: "…";
+  font-weight: 700;
+  margin-right: 0.25rem;
+}
+
+/* Optional hover/focus feedback */
+.deployed-yes:hover,
+.deployed-no:hover,
+.deployed-pending:hover {
+  filter: brightness(95%);
+}
+#policy-table tbody tr:hover,
+#events-table tbody tr:hover {
+  background-color: #f2f2f2 !important; /* light neutral gray */
+}
+/* Selected row = light purple band (distinct from hover) */
+.selected-row { background-color: #efe6ff !important; }   /* WCAG‑friendly */
+#policy-table tbody tr.selected-row:hover { background-color: #e6dcff !important; }
+/* High‑visibility focus */
+:focus { outline: 3px solid #7bb0ff !important; outline-offset: 2px; }
+#policy-table input.policy-select:focus { outline-offset: 4px; }
+.deployed-yes, .deployed-no, .deployed-pending {
+  font-size: 0.76rem;
+  padding: 0.08rem 0.42rem;
+}
+.deployed-yes::before, .deployed-no::before, .deployed-pending::before {
+  margin-right: 0.22rem;
+}
+/* ===== Accessible Buttons ===== */
+
+/* Bigger focus ring everywhere, including buttons */
+:focus {
+  outline: 3px solid #7bb0ff !important;
+  outline-offset: 2px;
+}
+
+/* Ensure strong contrast on our action buttons */
+.btn-primary   { background-color: #0b5ed7; border-color: #0a58ca; }
+.btn-primary:hover { background-color: #0a58ca; border-color: #0a53be; }
+
+.btn-success   { background-color: #198754; border-color: #157347; }
+.btn-success:hover { background-color: #157347; border-color: #146c43; }
+
+.btn-warning   { background-color: #f0ad4e; border-color: #eea236; color: #1a1a1a; }
+.btn-warning:hover { background-color: #eea236; border-color: #e69525; color: #1a1a1a; }
+
+/* Make disabled state look *clearly* disabled */
+.btn:disabled, .btn[aria-disabled="true"] {
+  opacity: .55 !important;
+  filter: grayscale(15%);
+  cursor: not-allowed !important;
+}
+
+/* Compact icon + count badge inside buttons */
+.btn .bi { margin-right: .35rem; }
+.btn .count-badge {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 1.25rem;
+  height: 1.25rem;
+  border-radius: 999px;
+  padding: 0 .3rem;
+  margin-left: .4rem;
+  font-size: .75rem;
+  line-height: 1;
+  background: rgba(255,255,255,.85);
+  color: #111;
+  border: 1px solid rgba(0,0,0,.15);
+}
+
+
+/* Notification system */
+#notification-container {
+  position: fixed;
+  top: 20px;
+  right: 20px;
+  z-index: 9999;
+  max-width: 350px;
+}
+
+.notification {
+  background-color: white;
+  border-radius: 4px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+  margin-bottom: 10px;
+  padding: 12px 16px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  transform: translateX(100%);
+  opacity: 0;
+  transition: all 0.3s ease;
+}
+
+.notification.show {
+  transform: translateX(0);
+  opacity: 1;
+}
+
+.notification-info {
+  border-left: 4px solid #1890ff;
+}
+
+.notification-success {
+  border-left: 4px solid #52c41a;
+}
+
+.notification-warning {
+  border-left: 4px solid #faad14;
+}
+
+.notification-error {
+  border-left: 4px solid #f5222d;
+}
+
+.notification-message {
+  flex: 1;
+  margin-right: 10px;
+}
+
+.notification-close {
+  background: none;
+  border: none;
+  cursor: pointer;
+  font-size: 16px;
+  color: #999;
+  padding: 0;
+  line-height: 1;
+}
+
+.notification-close:hover {
+  color: #666;
+}
+
+/* Update notification banner */
+.update-notification {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  right: 0;
+  background-color: #cfe2ff;
+  border-top: 1px solid #9ec5fe;
+  padding: 10px 20px;
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  z-index: 1000;
+  box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.1);
+}
+
+.update-message {
+  display: flex;
+  align-items: center;
+  font-weight: 500;
+  color: #0b235a;
+}
+
+.update-message i {
+  margin-right: 8px;
+  font-size: 1.1rem;
+}
+
+/* Dark mode support for update notification */
+@media (prefers-color-scheme: dark) {
+  .update-notification {
+    background-color: #343a40;
+    border-top: 1px solid #495057;
+  }
+  
+  .update-message {
+    color: #e9ecef;
+  }
+}
+/* Mode selector spacing */
+#mode-wrap label { margin-right: 4px; }
+/* keep the Condition column on one line in patterns mode */
+#events-table tbody tr td:nth-child(4),
+#events-container .dataTables_scrollHead thead tr th:nth-child(4) {
+  white-space: nowrap;
+}
+/* Let the Condition col (4th col) grow and wrap */
+#events-table thead th:nth-child(4),
+#events-table tbody td:nth-child(4) {
+  white-space: normal;              /* allow multi-line */
+  overflow: visible !important;
+  text-overflow: initial !important;
+  max-width: none !important;
+  word-break: break-word;           /* long tokens won’t block wrapping */
+}
+
+/* Avoid fixed layout that caps visible text despite width changes */
+#events-container .dataTables_scrollHead table,
+#events-container .dataTables_scrollBody table {
+  table-layout: auto !important;
+  width: auto !important;           /* allow > container width (scrollX handles it) */
+  min-width: 100%;
+}
+
+#auto-refresh-wrap { display:flex; align-items:center; margin-left:8px; }
+#auto-refresh-wrap .form-check-input { cursor: pointer; }
+#auto-refresh-wrap .form-check-label { cursor: pointer; user-select:none; }
+
+/* Extract Data button styling */
+#extract-data {
+  margin-left: 5px;
+  margin-right: 5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: all 0.2s ease;
+}
+
+#extract-data:hover {
+  background-color: #198754;
+  color: white;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+}
+
+#extract-data .bi {
+  font-size: 0.9rem;
+}
+
+/* Add animation for the extract data process */
+@keyframes pulse-success {
+  0% { transform: scale(1); }
+  50% { transform: scale(1.05); }
+  100% { transform: scale(1); }
+}
+
+.extract-success {
+  animation: pulse-success 0.5s ease;
+}
+
+/* Extract Details button styling */
+#extract-details {
+  margin-left: 5px;
+  margin-right: 5px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  transition: all 0.2s ease;
+}
+
+#extract-details:hover {
+  background-color: #0d6efd;
+  color: white;
+  box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+}
+
+#extract-details .bi {
+  font-size: 0.9rem;
+}
+
+/* JSON expanded fields styling */
+.json-field-col {
+  background-color: #e6f7ff !important;
+  border-bottom: 2px solid #1890ff !important;
+  font-weight: 600;
+  color: #0366d6;
+}
+
+/* When JSON fields are shown, add a visual indicator */
+.json-field-col.shown {
+  animation: fadeInColumns 0.3s ease-out forwards;
+}
+
+/* Style for the cells in JSON field columns */
+td.json-field-col {
+  background-color: #f8f9fa;
+  border-left: 1px solid #e9ecef;
+}
+
+/* Style for JSON values that are clickable */
+.json-field-value {
+  cursor: pointer;
+  color: #0366d6;
+  transition: all 0.2s ease;
+}
+
+.json-field-value:hover {
+  text-decoration: underline;
+  color: #0550ae;
+}
+
+/* Animation for toggling between views */
+@keyframes fadeInColumns {
+  from { opacity: 0; transform: translateY(-10px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+/* Style for badges in JSON fields */
+.json-field-col .badge {
+  font-size: 0.75rem;
+  padding: 0.25rem 0.5rem;
+}
+
+/* Add a subtle highlight to the expanded table */
+#events-table.expanded-json-view {
+  border-collapse: separate;
+  border-spacing: 0;
+}
+
+#events-table.expanded-json-view th,
+#events-table.expanded-json-view td {
+  padding: 8px 10px;
+}
+
+/* Add a visual indicator when JSON fields are expanded */
+.json-fields-expanded #extract-details {
+  position: relative;
+}
+
+.json-fields-expanded #extract-details::after {
+  content: "";
+  position: absolute;
+  top: -5px;
+  right: -5px;
+  width: 10px;
+  height: 10px;
+  background-color: #1890ff;
+  border-radius: 50%;
+  animation: pulse 1.5s infinite;
+}
+
+@keyframes pulse {
+  0% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(24, 144, 255, 0.7); }
+  70% { transform: scale(1); box-shadow: 0 0 0 6px rgba(24, 144, 255, 0); }
+  100% { transform: scale(0.95); box-shadow: 0 0 0 0 rgba(24, 144, 255, 0); }
+}

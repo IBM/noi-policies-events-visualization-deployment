@@ -1,0 +1,467 @@
+/*
+ * Copyright IBM Corp. 2024 - 2026
+ * SPDX-License-Identifier: Apache-2.0
+ */
+
+/* Advanced Filter Styles */
+
+/* Filter button */
+.advanced-filter-btn {
+    margin-left: 10px;
+    padding: 6px 12px;
+    background-color: #0f62fe;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    transition: background-color 0.2s;
+}
+
+.advanced-filter-btn:hover {
+    background-color: #0353e9;
+}
+
+.advanced-filter-btn:active {
+    background-color: #002d9c;
+}
+
+/* Active filter badge */
+.filter-active-badge {
+    display: inline-block;
+    margin-left: 10px;
+    padding: 4px 10px;
+    background-color: #24a148;
+    color: white;
+    border-radius: 12px;
+    font-size: 12px;
+    font-weight: 500;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.filter-active-badge:hover {
+    background-color: #198038;
+}
+
+/* Modal overlay */
+.advanced-filter-modal {
+    display: none;
+    position: fixed;
+    z-index: 10000;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    background-color: rgba(0, 0, 0, 0.5);
+    animation: fadeIn 0.2s;
+}
+
+.advanced-filter-modal.show {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; }
+    to { opacity: 1; }
+}
+
+/* Modal content */
+.advanced-filter-content {
+    background-color: #ffffff;
+    border-radius: 8px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+    width: 90%;
+    max-width: 950px;
+    max-height: 85vh;
+    display: flex;
+    flex-direction: column;
+    animation: slideIn 0.3s;
+}
+
+@keyframes slideIn {
+    from {
+        transform: translateY(-50px);
+        opacity: 0;
+    }
+    to {
+        transform: translateY(0);
+        opacity: 1;
+    }
+}
+
+/* Modal header */
+.advanced-filter-header {
+    padding: 20px 24px;
+    border-bottom: 1px solid #e0e0e0;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.advanced-filter-header h2 {
+    margin: 0;
+    font-size: 20px;
+    font-weight: 500;
+    color: #161616;
+}
+
+.advanced-filter-close {
+    background: none;
+    border: none;
+    font-size: 24px;
+    color: #525252;
+    cursor: pointer;
+    padding: 0;
+    width: 32px;
+    height: 32px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    border-radius: 4px;
+    transition: background-color 0.2s;
+}
+
+.advanced-filter-close:hover {
+    background-color: #e0e0e0;
+}
+
+/* Modal body */
+.advanced-filter-body {
+    padding: 24px;
+    overflow-y: auto;
+    flex: 1;
+}
+
+/* Add condition button */
+.add-condition-btn {
+    padding: 8px 16px;
+    background-color: #0f62fe;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    margin-bottom: 16px;
+    transition: background-color 0.2s;
+}
+
+.add-condition-btn:hover {
+    background-color: #0353e9;
+}
+
+/* Condition row */
+.filter-condition {
+    background-color: #f4f4f4;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    padding: 16px;
+    margin-bottom: 12px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 12px;
+    align-items: center;
+    animation: slideIn 0.2s;
+}
+
+.filter-condition-field {
+    display: flex;
+    flex-direction: column;
+    flex: 1;
+    min-width: 150px;
+}
+
+.filter-condition-field label {
+    font-size: 12px;
+    color: #525252;
+    margin-bottom: 4px;
+    font-weight: 500;
+}
+
+.filter-condition-field select,
+.filter-condition-field input {
+    padding: 8px 12px;
+    border: 1px solid #8d8d8d;
+    border-radius: 4px;
+    font-size: 14px;
+    background-color: white;
+    transition: border-color 0.2s;
+}
+
+.filter-condition-field select:focus,
+.filter-condition-field input:focus {
+    outline: none;
+    border-color: #0f62fe;
+    box-shadow: 0 0 0 2px rgba(15, 98, 254, 0.1);
+}
+
+.remove-condition-btn {
+    padding: 8px 12px;
+    background-color: #da1e28;
+    color: white;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 14px;
+    align-self: flex-end;
+    transition: background-color 0.2s;
+}
+
+.remove-condition-btn:hover {
+    background-color: #ba1b23;
+}
+
+/* Logic selector */
+.filter-logic-selector {
+    margin: 16px 0;
+    padding: 12px;
+    background-color: #e8f4fd;
+    border-radius: 4px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+
+.filter-logic-selector label {
+    font-size: 14px;
+    font-weight: 500;
+    color: #161616;
+}
+
+.filter-logic-selector select {
+    padding: 6px 12px;
+    border: 1px solid #0f62fe;
+    border-radius: 4px;
+    font-size: 14px;
+    background-color: white;
+    color: #0f62fe;
+    font-weight: 500;
+}
+
+/* Filter summary */
+.filter-summary {
+    margin-top: 16px;
+    padding: 16px;
+    background-color: #f4f4f4;
+    border-left: 4px solid #0f62fe;
+    border-radius: 4px;
+}
+
+.filter-summary-title {
+    font-size: 12px;
+    color: #525252;
+    margin-bottom: 8px;
+    font-weight: 500;
+    text-transform: uppercase;
+}
+
+.filter-summary-text {
+    font-size: 14px;
+    color: #161616;
+    font-family: 'IBM Plex Mono', monospace;
+    word-break: break-word;
+}
+
+.filter-summary-empty {
+    color: #8d8d8d;
+    font-style: italic;
+}
+
+/* Modal footer */
+.advanced-filter-footer {
+    padding: 16px 24px;
+    border-top: 1px solid #e0e0e0;
+    display: flex;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.advanced-filter-footer button {
+    padding: 10px 20px;
+    border: none;
+    border-radius: 4px;
+    font-size: 14px;
+    cursor: pointer;
+    transition: background-color 0.2s;
+}
+
+.clear-filters-btn {
+    background-color: #ffffff;
+    color: #da1e28;
+    border: 1px solid #da1e28;
+}
+
+.clear-filters-btn:hover {
+    background-color: #fff1f1;
+}
+
+.cancel-btn {
+    background-color: #ffffff;
+    color: #161616;
+    border: 1px solid #8d8d8d;
+}
+
+.cancel-btn:hover {
+    background-color: #e0e0e0;
+}
+
+.apply-filter-btn {
+    background-color: #0f62fe;
+    color: white;
+    font-weight: 500;
+}
+
+.apply-filter-btn:hover {
+    background-color: #0353e9;
+}
+
+.apply-filter-btn:disabled {
+    background-color: #c6c6c6;
+    cursor: not-allowed;
+}
+
+/* Custom timestamp calendar */
+.condition-value-timestamp {
+    cursor: pointer;
+    background-color: #ffffff;
+}
+
+.timestamp-input-wrap {
+    position: relative;
+}
+
+.custom-date-picker {
+    display: none;
+    position: absolute;
+    top: calc(100% + 6px);
+    right: 0;
+    z-index: 10001;
+    width: 280px;
+    padding: 8px;
+    background: #ffffff;
+    border: 1px solid #c6c6c6;
+    border-radius: 8px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.18);
+}
+
+.custom-date-picker.show {
+    display: block;
+}
+
+.calendar-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 4px;
+    margin-bottom: 6px;
+}
+
+.calendar-month-year {
+    display: flex;
+    gap: 4px;
+    flex: 1;
+}
+
+.calendar-month-year select {
+    flex: 1;
+    padding: 4px 6px;
+    border: 1px solid #8d8d8d;
+    border-radius: 4px;
+    background: #ffffff;
+    font-size: 11px;
+}
+
+.calendar-nav-btn,
+.calendar-action-btn {
+    padding: 4px 6px;
+    border: 1px solid #8d8d8d;
+    border-radius: 4px;
+    background: #ffffff;
+    cursor: pointer;
+    font-size: 11px;
+}
+
+.calendar-nav-btn:hover,
+.calendar-action-btn:hover {
+    background: #f4f4f4;
+}
+
+.calendar-weekdays,
+.calendar-grid {
+    display: grid;
+    grid-template-columns: repeat(7, 1fr);
+    gap: 3px;
+}
+
+.calendar-weekdays {
+    margin-bottom: 4px;
+    color: #525252;
+    font-size: 10px;
+    font-weight: 600;
+    text-align: center;
+}
+
+.calendar-day {
+    min-height: 24px;
+    padding: 2px 0;
+    border: 1px solid transparent;
+    border-radius: 4px;
+    background: #ffffff;
+    cursor: pointer;
+    font-size: 11px;
+}
+
+.calendar-day:hover:not(:disabled) {
+    background: #e8f0fe;
+    border-color: #0f62fe;
+}
+
+.calendar-day.selected {
+    background: #0f62fe;
+    color: #ffffff;
+    border-color: #0f62fe;
+}
+
+.calendar-day.other-month {
+    color: #a8a8a8;
+    background: #f4f4f4;
+    cursor: default;
+}
+
+.calendar-footer {
+    display: flex;
+    justify-content: flex-end;
+    gap: 6px;
+    margin-top: 8px;
+}
+
+/* Responsive design */
+@media (max-width: 768px) {
+    .advanced-filter-content {
+        width: 95%;
+        max-height: 90vh;
+    }
+    
+    .filter-condition {
+        flex-direction: column;
+        align-items: stretch;
+    }
+    
+    .filter-condition-field {
+        min-width: 100%;
+    }
+    
+    .remove-condition-btn {
+        align-self: stretch;
+    }
+
+    .custom-date-picker {
+        left: 0;
+        right: auto;
+        width: 100%;
+        min-width: 280px;
+    }
+}
+

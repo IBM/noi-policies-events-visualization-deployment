@@ -1,0 +1,12 @@
+__pycache__/
+*.pyc
+*.pyo
+.git/
+*.log
+venv/
+.env
+output/
+labeled_events/
+custom_models/
+*.csv
+*.parquet

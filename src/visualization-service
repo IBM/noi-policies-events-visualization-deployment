@@ -1,0 +1,170 @@
+#!/bin/bash
+#
+# visualization-service - Policies and Events Visualization Service
+#
+# chkconfig: 2345 85 15
+# description: Policies and Events Visualization Service for OpenShift
+# processname: visualization-service
+# pidfile: /var/run/visualization-service.pid
+# config: /etc/sysconfig/visualization-service
+
+### BEGIN INIT INFO
+# Provides: visualization-service
+# Required-Start: $network $local_fs
+# Required-Stop: $network $local_fs
+# Default-Start: 2 3 4 5
+# Default-Stop: 0 1 6
+# Short-Description: Start and stop Policies and Events Visualization Service
+# Description: Policies and Events Visualization Service for OpenShift
+### END INIT INFO
+
+# Source function library
+. /etc/rc.d/init.d/functions
+
+# Source networking configuration
+[ -f /etc/sysconfig/network ] && . /etc/sysconfig/network
+
+# Check that networking is up
+[ "${NETWORKING}" = "no" ] && exit 0
+
+# Service configuration
+SERVICE_NAME="visualization-service"
+SCRIPT_PATH="/opt/dev/yasser_python_scripts/policies_and_events_visualization_auto_update/start_visualization_service.sh"
+PIDFILE="/var/run/visualization-service.pid"
+LOCKFILE="/var/lock/subsys/visualization-service"
+USER="root"
+
+# Source service configuration if exists
+[ -f /etc/sysconfig/$SERVICE_NAME ] && . /etc/sysconfig/$SERVICE_NAME
+
+# Check if script exists
+if [ ! -x "$SCRIPT_PATH" ]; then
+    echo "Service script not found or not executable: $SCRIPT_PATH"
+    exit 5
+fi
+
+# Make script executable if it's not
+chmod +x "$SCRIPT_PATH"
+
+start() {
+    echo -n "Starting $SERVICE_NAME: "
+    
+    # Check if service is already running
+    if [ -f "$PIDFILE" ]; then
+        PID=$(cat "$PIDFILE")
+        if ps -p "$PID" > /dev/null 2>&1; then
+            echo "Already running with PID $PID"
+            return 0
+        else
+            # Remove stale PID file
+            rm -f "$PIDFILE"
+        fi
+    fi
+    
+    # Start the service
+    daemon --user "$USER" "$SCRIPT_PATH --daemon > /dev/null 2>&1 &"
+    RETVAL=$?
+    
+    if [ $RETVAL -eq 0 ]; then
+        # Save PID to file
+        echo $! > "$PIDFILE"
+        touch "$LOCKFILE"
+        success
+    else
+        failure
+    fi
+    
+    echo
+    return $RETVAL
+}
+
+stop() {
+    echo -n "Stopping $SERVICE_NAME: "
+    
+    # Check if service is running
+    if [ ! -f "$PIDFILE" ]; then
+        echo "Not running"
+        return 0
+    fi
+    
+    # Get PID from file
+    PID=$(cat "$PIDFILE")
+    
+    # Check if process exists
+    if ! ps -p "$PID" > /dev/null 2>&1; then
+        echo "Process not found, cleaning up"
+        rm -f "$PIDFILE" "$LOCKFILE"
+        return 0
+    fi
+    
+    # Kill the parent process
+    kill "$PID"
+    RETVAL=$?
+    
+    # Wait for process to terminate
+    count=0
+    while ps -p "$PID" > /dev/null 2>&1 && [ $count -lt 10 ]; do
+        sleep 1
+        ((count++))
+    done
+    
+    # Force kill if still running
+    if ps -p "$PID" > /dev/null 2>&1; then
+        kill -9 "$PID" > /dev/null 2>&1
+    fi
+    
+    # Remove PID file and lock file
+    rm -f "$PIDFILE" "$LOCKFILE"
+    
+    if [ $RETVAL -eq 0 ]; then
+        success
+    else
+        failure
+    fi
+    
+    echo
+    return $RETVAL
+}
+
+restart() {
+    stop
+    sleep 2
+    start
+}
+
+status() {
+    if [ -f "$PIDFILE" ]; then
+        PID=$(cat "$PIDFILE")
+        if ps -p "$PID" > /dev/null 2>&1; then
+            echo "$SERVICE_NAME is running with PID $PID"
+            return 0
+        else
+            echo "$SERVICE_NAME is not running but PID file exists"
+            return 1
+        fi
+    else
+        echo "$SERVICE_NAME is not running"
+        return 3
+    fi
+}
+
+case "$1" in
+    start)
+        start
+        ;;
+    stop)
+        stop
+        ;;
+    restart|reload)
+        restart
+        ;;
+    status)
+        status
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|restart|status}"
+        exit 1
+        ;;
+esac
+
+exit $RETVAL
