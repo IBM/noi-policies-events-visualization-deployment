@@ -184,7 +184,10 @@ main() {
     echo "[INFO] deleting cache file: deployed_cache.json"
     rm -f deployed_cache.json
   fi
-
+  if [[ -e "archived_cache.json" ]]; then
+    echo "[INFO] deleting cache file: archived_cache.json"
+    rm -f archived_cache.json
+  fi
   # Display mode information
   local mode_str="$([[ "$REUSE" == true ]] && echo "reuse (export missing only)" || echo "full export")"
   if $LOCAL_MODE; then
