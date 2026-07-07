@@ -47,6 +47,7 @@ DEFAULT_OUTPUT_DIR = "output"
 DEFAULT_PORT = 5000
 DEFAULT_BIND_ADDRESS = "0.0.0.0"
 DEFAULT_CONFIG_FILE = "web_interface_config.ini"
+API_URL_LOGIN_FILE = "api_url_login.txt"
 
 # Write the viewer HTML *into the current working directory*
 OUTPUT_HTML_NAME = "policy_event_viewer.html"
@@ -270,6 +271,36 @@ def verify_password(stored_hash: str, password: str) -> bool:
 # Load users when module is imported
 load_users_from_csv()
 
+# ---- api_url_login.txt pre-fill ----
+_api_url_login: Dict[str, str] = {}   # keys: url, username, password
+
+def _load_api_url_login():
+    """
+    Load registry URL and credentials from api_url_login.txt if it exists.
+    File format (one value per line, blank lines / missing lines = empty):
+        line 1 — registry URL
+        line 2 — username  (optional)
+        line 3 — password  (optional)
+    """
+    global _api_url_login
+    path = os.environ.get("API_URL_LOGIN_FILE", API_URL_LOGIN_FILE)
+    if not os.path.exists(path):
+        return
+    try:
+        with open(path, "r", encoding="utf-8") as f:
+            lines = [l.rstrip("\n") for l in f.readlines()]
+        _api_url_login = {
+            "url":      lines[0].strip() if len(lines) > 0 else "",
+            "username": lines[1].strip() if len(lines) > 1 else "",
+            "password": lines[2].strip() if len(lines) > 2 else "",
+        }
+        masked = ("*" * len(_api_url_login["password"])) if _api_url_login["password"] else "(none)"
+        print(f"[api_url_login] Loaded from {path}: url={_api_url_login['url']!r} user={_api_url_login['username']!r} password={masked}")
+    except Exception as e:
+        print(f"[api_url_login] Failed to load {path}: {e}")
+
+_load_api_url_login()
+
 # -------------------- Globals --------------------
 policy_summary_data: List[Dict[str, Any]] = []  # includes group_id, deployed
 events_detail_data: List[Dict[str, Any]] = []
@@ -285,6 +316,11 @@ POLICY_ID_INDEX: Dict[str, List[int]] = {}  # policy_id -> list of row indices i
 DEPLOYED_CACHE_PATH = os.environ.get("DEPLOYED_CACHE_PATH", "deployed_cache.json")
 _deployed_cache_lock = threading.Lock()
 _deployed_cache_ids = set()
+
+# ---- Archived policy cache (server-side file) ----
+ARCHIVED_CACHE_PATH = os.environ.get("ARCHIVED_CACHE_PATH", "archived_cache.json")
+_archived_cache_lock = threading.Lock()
+_archived_cache_ids = set()
 
 def _load_deployed_cache_on_startup():
     global _deployed_cache_ids
@@ -322,6 +358,120 @@ def clear_deployed_cache():
             pass
 
 _load_deployed_cache_on_startup()
+
+def _load_archived_cache_on_startup():
+    global _archived_cache_ids
+    try:
+        with open(ARCHIVED_CACHE_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f) or []
+            _archived_cache_ids = set(str(x) for x in data if x)
+    except FileNotFoundError:
+        _archived_cache_ids = set()
+    except Exception:
+        _archived_cache_ids = set()
+
+def _save_archived_cache():
+    tmp = ARCHIVED_CACHE_PATH + ".tmp"
+    with open(tmp, "w", encoding="utf-8") as f:
+        json.dump(sorted(_archived_cache_ids), f, indent=2)
+    os.replace(tmp, ARCHIVED_CACHE_PATH)
+
+def add_ids_to_archived_cache(ids):
+    if not ids:
+        return
+    with _archived_cache_lock:
+        for pid in ids:
+            if pid:
+                _archived_cache_ids.add(str(pid))
+        _save_archived_cache()
+
+def remove_ids_from_archived_cache(ids):
+    """Remove specific IDs from the archive cache (e.g. after re-deploying an archived policy)."""
+    if not ids:
+        return
+    with _archived_cache_lock:
+        for pid in ids:
+            _archived_cache_ids.discard(str(pid))
+        _save_archived_cache()
+
+def clear_archived_cache():
+    global _archived_cache_ids
+    with _archived_cache_lock:
+        _archived_cache_ids.clear()
+        try:
+            os.remove(ARCHIVED_CACHE_PATH)
+        except FileNotFoundError:
+            pass
+
+_load_archived_cache_on_startup()
+
+def _apply_policy_filter(rows: List[Dict[str, Any]], policy_filter_json: str, archived_ids: set) -> List[Dict[str, Any]]:
+    """
+    Filter a list of policy row dicts using the policyFilter JSON sent from the frontend.
+    Supports columns: policy_id, event_count, event_occurrences, comment_text, deployed, archived.
+    """
+    try:
+        fobj = json.loads(policy_filter_json)
+    except Exception as e:
+        print(f"[policyFilter] JSON parse error: {e} — raw: {policy_filter_json[:200]!r}")
+        return rows
+    conditions = fobj.get("conditions", [])
+    logic      = fobj.get("logic", "AND")
+    print(f"[policyFilter] conditions={conditions}, logic={logic}, rows_in={len(rows)}")
+    if not conditions:
+        return rows
+
+    def _str_match(a: str, op: str, b: str) -> bool:
+        a, b = a.lower(), b.lower()
+        if op == "contains":  return b in a
+        if op == "!contains": return b not in a
+        if op == "=":         return a == b
+        if op == "!=":        return a != b
+        if op == "starts":    return a.startswith(b)
+        if op == "ends":      return a.endswith(b)
+        return True
+
+    def _num_match(a, op: str, b) -> bool:
+        try:
+            af, bf = float(a), float(b)
+        except (TypeError, ValueError):
+            return True
+        if op == ">=": return af >= bf
+        if op == "<=": return af <= bf
+        if op == ">":  return af > bf
+        if op == "<":  return af < bf
+        if op == "=":  return af == bf
+        if op == "!=": return af != bf
+        return True
+
+    def _test(row: Dict[str, Any], cond: Dict[str, Any]) -> bool:
+        col = cond.get("column", "")
+        op  = cond.get("operator", "")
+        val = str(cond.get("value", "") or "")
+        pid = str(row.get("policy_id") or "")
+
+        if col == "archived":
+            is_arch = pid in archived_ids
+            return is_arch if op == "yes" else not is_arch
+
+        if col == "deployed":
+            is_arch    = pid in archived_ids
+            is_deployed = not is_arch and bool(row.get("deployed", False))
+            return is_deployed if op == "yes" else not is_deployed
+
+        if col in ("event_count", "event_occurrences", "ranking_score"):
+            return _num_match(row.get(col), op, val)
+
+        # string fields: policy_id, comment_text
+        return _str_match(str(row.get(col) or ""), op, val)
+
+    def _matches(row: Dict[str, Any]) -> bool:
+        results = [_test(row, c) for c in conditions]
+        return any(results) if logic == "OR" else all(results)
+
+    filtered = [r for r in rows if _matches(r)]
+    print(f"[policyFilter] rows_out={len(filtered)}")
+    return filtered
 
 # -------------------- Utility --------------------
 def _log_timing(label: str, start: float):
@@ -623,22 +773,24 @@ def load_data_to_memory(output_dir: str) -> bool:
                 eo  = _maybe_float_or_int(r.get("event_occurrences", "") or "")
                 dep = 1 if dep_map.get(pid, False) else 0
                 gid = r.get("group_id") or ""
+                cmt = r.get("comment_text") or ""
 
                 # keep last occurrence (or first — either is fine)
-                rows_by_policy[pid] = (pid, rs, ec, eo, dep, gid)
+                rows_by_policy[pid] = (pid, rs, ec, eo, dep, gid, cmt)
 
         rows = list(rows_by_policy.values())
         
         # Convert tuples to dictionaries for policy_summary_data
         policy_summary_data = []
-        for pid, rs, ec, eo, dep, gid in rows:
+        for pid, rs, ec, eo, dep, gid, cmt in rows:
             policy_summary_data.append({
                 "policy_id": pid,
                 "ranking_score": rs,
                 "event_count": ec,
                 "event_occurrences": eo,
                 "deployed": bool(dep),
-                "group_id": gid
+                "group_id": gid,
+                "comment_text": cmt,
             })
 
         # Load events_detail (faster with list comprehension)
@@ -873,7 +1025,8 @@ def load_data_to_sqlite(output_dir: str, sqlite_path: str, event_instances: Opti
                 event_count INTEGER,
                 event_occurrences INTEGER,
                 deployed INTEGER,
-                group_id TEXT
+                group_id TEXT,
+                comment_text TEXT DEFAULT ''
             );
             CREATE TABLE events (
                 policy_id TEXT,
@@ -908,23 +1061,25 @@ def load_data_to_sqlite(output_dir: str, sqlite_path: str, event_instances: Opti
                 eo  = _maybe_float_or_int(r.get("event_occurrences", "") or "")
                 dep = 1 if dep_map.get(pid, False) else 0
                 gid = r.get("group_id") or ""
+                cmt = r.get("comment_text") or ""
 
                 # last-write-wins (same as memory mode)
-                rows_by_policy[pid] = (pid, rs, ec, eo, dep, gid)
+                rows_by_policy[pid] = (pid, rs, ec, eo, dep, gid, cmt)
 
         rows = list(rows_by_policy.values())
         print(f"[sqlite] inserting {len(rows)} policies")
         c.executemany(
             """
             INSERT INTO policies
-            (policy_id, ranking_score, event_count, event_occurrences, deployed, group_id)
-            VALUES (?,?,?,?,?,?)
+            (policy_id, ranking_score, event_count, event_occurrences, deployed, group_id, comment_text)
+            VALUES (?,?,?,?,?,?,?)
             ON CONFLICT(policy_id) DO UPDATE SET
             ranking_score      = excluded.ranking_score,
             event_count        = excluded.event_count,
             event_occurrences  = excluded.event_occurrences,
             deployed           = excluded.deployed,
-            group_id           = excluded.group_id
+            group_id           = excluded.group_id,
+            comment_text       = excluded.comment_text
             """,
             rows
         )
@@ -1535,6 +1690,19 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/deploy_policies" and method == "POST":
             return self._api_deploy_policies
 
+        if path == "/api/archive_policies" and method == "POST":
+            return self._api_archive_policies
+
+        if path == "/api/archive_cache" and method in ("GET", "POST", "PATCH", "DELETE"):
+            if method == "GET":
+                return self._api_get_archive_cache
+            if method == "POST":
+                return self._api_post_archive_cache
+            if method == "PATCH":
+                return self._api_remove_archive_cache_ids
+            if method == "DELETE":
+                return self._api_delete_archive_cache
+
         if path.startswith("/api/pattern_config/") and method == "GET":
             return self._api_pattern_config
 
@@ -1714,6 +1882,18 @@ class Handler(BaseHTTPRequestHandler):
             
         parsed, _ = self._parse_args()
         fn = self._route("DELETE", parsed.path)
+        if not fn:
+            return _send_404(self)
+        return fn()
+
+    def do_PATCH(self):
+        if not self._check_auth():
+            if FORCE_LOGIN_PAGE:
+                return self._send_login_page()
+            else:
+                return self._send_auth_required()
+        parsed, _ = self._parse_args()
+        fn = self._route("PATCH", parsed.path)
         if not fn:
             return _send_404(self)
         return fn()
@@ -2332,6 +2512,9 @@ class Handler(BaseHTTPRequestHandler):
             "enableCors": ENABLE_CORS,
             "debugTiming": DEBUG_TIMING,
             "timestampRangeHint": timestamp_range_hint,
+            "registryUrl":      _api_url_login.get("url", ""),
+            "registryUsername": _api_url_login.get("username", ""),
+            "registryPassword": _api_url_login.get("password", ""),
         }
         
         # Generate JavaScript that sets window.APP_CONFIG
@@ -2363,6 +2546,7 @@ class Handler(BaseHTTPRequestHandler):
             global_search = (args.get("global_search") or "").strip()
             group_id = (args.get("group_id") or "").strip()
             advanced_filter_json = (args.get("advancedFilter") or "").strip()
+            policy_filter_json   = (args.get("policyFilter")   or "").strip()
             debug_print(f"[DEBUG] _api_policies_ss: group_id={group_id}, global_search={global_search}, advancedFilter={advanced_filter_json}")
 
             # ---- Patterns mode: serve from CONDSETS_BY_POLICY ----
@@ -2403,9 +2587,9 @@ class Handler(BaseHTTPRequestHandler):
                 return _json_response(self, res)
             # ---- Related-events mode ----
             if SERVER_USE_SQLITE and DB_CONN is not None:
-                base_sql  = "SELECT policy_id, ranking_score, event_count, event_occurrences, deployed, group_id FROM policies"
+                base_sql  = "SELECT policy_id, ranking_score, event_count, event_occurrences, deployed, group_id, comment_text FROM policies"
                 count_sql = "SELECT COUNT(*) FROM policies"
-                cols_filter = ["policy_id", "CAST(ranking_score AS TEXT)", "CAST(event_count AS TEXT)"]
+                cols_filter = ["policy_id", "CAST(ranking_score AS TEXT)", "CAST(event_count AS TEXT)", "comment_text"]
                 cols_order  = ["policy_id", "ranking_score", "event_count", "event_occurrences", "deployed"]
                 params: List[Any] = []
                 where_clauses: List[str] = []
@@ -2455,8 +2639,13 @@ class Handler(BaseHTTPRequestHandler):
                             "event_count": r.get("event_count"),
                             "event_occurrences": r.get("event_occurrences"),
                             "deployed": bool(r.get("deployed", 0)),
+                            "comment_text": r.get("comment_text") or "",
                         }
                     res["data"] = [projector(x) for x in res["data"]]
+                    # Apply policy filter as post-processing on already-fetched page
+                    if policy_filter_json:
+                        res["data"] = _apply_policy_filter(res["data"], policy_filter_json, _archived_cache_ids)
+                        res["recordsFiltered"] = len(res["data"])
                     _log_timing("policies_ss(sqlite)", t0)
                     return _json_response(self, res)
                 except (sqlite3.DatabaseError, sqlite3.OperationalError) as e:
@@ -2556,7 +2745,11 @@ class Handler(BaseHTTPRequestHandler):
                         import traceback
                         traceback.print_exc()
 
-                cols = ["policy_id", "ranking_score", "event_count", "event_occurrences", "deployed"]
+                # Apply policy-level filter (policy_id, events, occurrences, comment, deployed, archived)
+                if policy_filter_json:
+                    policies = _apply_policy_filter(policies, policy_filter_json, _archived_cache_ids)
+
+                cols = ["policy_id", "ranking_score", "event_count", "event_occurrences", "deployed", "comment_text"]
                 def proj(r: Dict[str, Any]) -> Dict[str, Any]:
                     return {
                         "policy_id": r.get("policy_id"),
@@ -2564,6 +2757,7 @@ class Handler(BaseHTTPRequestHandler):
                         "event_count": r.get("event_count"),
                         "event_occurrences": r.get("event_occurrences"),
                         "deployed": r.get("deployed", False),
+                        "comment_text": r.get("comment_text") or "",
                     }
                 res = dt_page_mem(args, policies, cols, projector=proj)
                 _log_timing("policies_ss(memory)", t0)
@@ -3095,6 +3289,143 @@ class Handler(BaseHTTPRequestHandler):
         log_audit("DEPLOY_POLICIES", username, client_ip=client_ip, details=details)
         
         return _json_response(self, {"ok": ok, "fail": fail, "urls": urls})
+
+    def _api_archive_policies(self):
+        """
+        Archive proxy. Body identical to deploy_policies.
+        Sends PATCH {base_url}/{policy_id}?policystate=rejected&policylocked=false
+        Same /activate/system endpoint as deploy — policystate=rejected is the
+        archive/rejected state in the NOI Policy Registry API.
+        """
+        data = _read_body_json(self)
+        base_url    = (data.get("base_url") or "").strip().rstrip("/")
+        username    = data.get("username") or ""
+        password    = data.get("password") or ""
+        ids         = [str(x) for x in (data.get("ids") or []) if x]
+        comment_raw = (data.get("comment") or "Archived via Policy Viewer").strip()
+        comment_enc = quote(comment_raw, safe="")
+        verify_tls = bool(data.get("verify_tls", True))
+        ca_bundle  = data.get("ca_bundle") or None
+        connect_to = float(data.get("connect_timeout", 10.0))
+        read_to    = float(data.get("read_timeout", 25.0))
+        overall_timeout = float(data.get("overall_timeout", max(30.0, 5.0 * len(ids))))
+        try:
+            concurrency = int(data.get("concurrency", 4))
+        except Exception:
+            concurrency = 4
+        max_workers = max(1, min(concurrency, len(ids) or 1))
+
+        if not base_url:
+            return _json_response(self, {"error": "Missing base_url"}, status=400)
+        if not ids:
+            return _json_response(self, {"ok": [], "fail": [], "urls": {}})
+
+        # Archive uses the same /activate/system endpoint as deploy,
+        # but with policystate=rejected (not archived).
+        # Ref: archive_noi_policies_by_policyregistery/archive_policies_using_policy_registry.sh
+        def build_url(pid: str) -> str:
+            return f"{base_url}/{quote(pid, safe='')}?policystate=rejected&policylocked=false&commenttext={comment_enc}"
+
+        # SSL context
+        context = None
+        if base_url.lower().startswith("https"):
+            if not verify_tls:
+                context = ssl._create_unverified_context()
+            elif ca_bundle:
+                context = ssl.create_default_context(cafile=ca_bundle)
+            else:
+                context = ssl.create_default_context()
+
+        # Basic Auth header if provided
+        auth_header = None
+        if username or password:
+            import base64 as _b64
+            token = _b64.b64encode(f"{username}:{password}".encode("utf-8")).decode("ascii")
+            auth_header = f"Basic {token}"
+
+        ok, fail, urls = [], [], {}
+        def worker(pid: str):
+            url = build_url(pid)
+            headers = {"Accept": "*/*", "Connection": "close"}
+            if auth_header:
+                headers["Authorization"] = auth_header
+            req = Request(url, data=b"", headers=headers, method="PATCH")
+            try:
+                with urlopen(req, timeout=connect_to + read_to, context=context) as resp:
+                    status = resp.status
+                    body = (resp.read(400) or b"").decode("utf-8", "ignore")
+                if 200 <= status < 300:
+                    return ("ok", pid, status, "", url)
+                else:
+                    return ("fail", pid, status, body, url)
+            except Exception as e:
+                return ("fail", pid, 0, str(e)[:400], url)
+
+        done = []
+        with ThreadPoolExecutor(max_workers=max_workers) as ex:
+            fut_to_id = {ex.submit(worker, pid): pid for pid in ids}
+            try:
+                for fut in as_completed(fut_to_id, timeout=overall_timeout):
+                    done.append(fut)
+                    kind, pid, status, info, url = fut.result()
+                    urls[pid] = url
+                    if kind == "ok":
+                        ok.append(pid)
+                    else:
+                        fail.append({"id": pid, "status": status, "error": info, "url": url})
+            except Exception:
+                pass
+            unfinished = [f for f in fut_to_id if f not in done]
+            for f in unfinished:
+                pid = fut_to_id[f]
+                try:
+                    f.cancel()
+                except Exception:
+                    pass
+                url = urls.get(pid) or build_url(pid)
+                fail.append({"id": pid, "status": 0, "error": "overall timeout", "url": url})
+
+        # Log archive action
+        req_username = "unknown"
+        req_auth = self.headers.get('Authorization')
+        if req_auth:
+            try:
+                auth_type, auth_data = req_auth.split(' ', 1)
+                if auth_type.lower() == 'basic':
+                    decoded = base64.b64decode(auth_data).decode('utf-8')
+                    req_username, _ = decoded.split(':', 1)
+            except Exception:
+                pass
+
+        client_ip = self.client_address[0]
+        details = f"policies={len(ids)} success={len(ok)} failed={len(fail)}"
+        log_audit("ARCHIVE_POLICIES", req_username, client_ip=client_ip, details=details)
+
+        return _json_response(self, {"ok": ok, "fail": fail, "urls": urls})
+
+    # ---- Archive cache endpoints ----
+
+    def _api_get_archive_cache(self):
+        with _archived_cache_lock:
+            ids = sorted(_archived_cache_ids)
+        return _json_response(self, {"ids": ids, "path": ARCHIVED_CACHE_PATH})
+
+    def _api_post_archive_cache(self):
+        body = _read_body_json(self)
+        ids = [str(x) for x in (body.get("ids") or []) if x]
+        add_ids_to_archived_cache(ids)
+        return _json_response(self, {"success": True, "count": len(_archived_cache_ids)})
+
+    def _api_remove_archive_cache_ids(self):
+        """PATCH /api/archive_cache — remove specific IDs (used when re-deploying archived policies)."""
+        body = _read_body_json(self)
+        ids = [str(x) for x in (body.get("ids") or []) if x]
+        remove_ids_from_archived_cache(ids)
+        return _json_response(self, {"success": True, "count": len(_archived_cache_ids)})
+
+    def _api_delete_archive_cache(self):
+        clear_archived_cache()
+        return _json_response(self, {"success": True})
 
 # -------------------- Server bootstrap --------------------
 def start_web_server(output_dir: str, port: int, use_sqlite: bool = False, sqlite_path: Optional[str] = None,

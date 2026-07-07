@@ -32,7 +32,7 @@ SPDX-License-Identifier: Apache-2.0
       <div class="d-flex flex-wrap align-items-center gap-2">
         <form id="registry-form" class="d-flex flex-wrap align-items-center gap-2">
           <label for="registry-url" class="form-label m-0 me-1 fw-semibold">Policy Registry URL</label>
-          <input type="url" id="registry-url" class="form-control form-control-sm registry-url" placeholder="https://<hostname for policyregistry route>/api/policies/user/v1/policies/activate/system" />
+          <input type="url" id="registry-url" class="form-control form-control-sm registry-url" placeholder="https://<hostname>/api/policies/user/v1/policies/activate/system  (used for both Deploy and Archive)" />
           <input type="text" id="registry-username" class="form-control form-control-sm registry-user" placeholder="Username" />
           <input type="password" id="registry-password" class="form-control form-control-sm registry-pass" placeholder="Password" autocomplete="current-password" />
         </form>
@@ -66,7 +66,9 @@ SPDX-License-Identifier: Apache-2.0
                     <th>Ranking</th>
                     <th>Events</th>
                     <th>Occs</th>
-                    <th>Deployed</th>
+                    <th class="text-center enabled-col">Deployed</th>
+                    <th>Comment</th>
+                    <th class="text-center select-col"></th>
                   </tr>
                 </thead>
                 <tbody></tbody>

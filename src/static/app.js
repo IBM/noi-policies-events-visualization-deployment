@@ -124,14 +124,15 @@ var jsonFields = [
 ];
 
 // Selection state
-var selectedPolicies = new Set();
-var selectedPolicyStates = new Map(); // id -> deployed? (bool)
+var selectedPolicies = new Set();          // deploy selection (undeployed rows only)
+var selectedPolicyStates = new Map();      // id -> deployed? (bool)
+var selectedArchivePolicies = new Set();   // archive selection (any non-archived row)
 
 // Payload state
 var payloadRaw = null, payloadPretty = null, payloadSuffix = "";
 
 // Layout splits
-var LEFT_SPLIT = +localStorage.getItem('leftSplit') || (5 / 13);
+var LEFT_SPLIT = +localStorage.getItem('leftSplit') || 0.5;
 var RIGHT_SPLIT = +localStorage.getItem('rightSplit') || 0.25;
 var MAIN_RESIZER_THICKNESS = 8;
 var RESIZER_THICKNESS = 8;
@@ -139,6 +140,10 @@ var RESIZER_THICKNESS = 8;
 // ---- Deploy cache (frontend-only) ----
 const LS_DEPLOY_CACHE_KEY = 'deploy_cache_ids';
 var overrideDeployed = new Set(); // IDs known deployed by client (from cache or recent success)
+
+// ---- Archive cache (frontend-only) ----
+const LS_ARCHIVE_CACHE_KEY = 'archive_cache_ids';
+var overrideArchived = new Set(); // IDs known archived by client (from cache or recent success)
 
 function autoRefreshEnabled() {
   try { return localStorage.getItem(LS_AUTO_REFRESH) === '1'; } catch (_) { return false; }
@@ -277,15 +282,29 @@ function clearDeployCacheSilently() {
   // Clear server-side cache
   return fetch('/api/deploy_cache', { method: 'DELETE' })
     .then(() => {
-      // Ensure client cache is cleared again after server response
       overrideDeployed.clear();
       updateClearCacheButton();
       return true;
     })
     .catch(() => {
-      // Even if server cache clear fails, ensure client cache is cleared
       overrideDeployed.clear();
       updateClearCacheButton();
+      return false;
+    });
+}
+
+function clearArchiveCacheSilently() {
+  overrideArchived.clear();
+  updateClearArchiveCacheButton();
+  return fetch('/api/archive_cache', { method: 'DELETE' })
+    .then(() => {
+      overrideArchived.clear();
+      updateClearArchiveCacheButton();
+      return true;
+    })
+    .catch(() => {
+      overrideArchived.clear();
+      updateClearArchiveCacheButton();
       return false;
     });
 }
@@ -369,6 +388,20 @@ function updateClearCacheButton() {
     .attr('title', hasCache
       ? 'Clear cached deployed policy IDs (UI overrides)'
       : 'No cached deployed IDs');
+}
+
+function updateClearArchiveCacheButton() {
+  const hasCache = overrideArchived.size > 0;
+  const $btn = $('#clear-archive-cache');
+  if ($btn.length === 0) return;
+  $btn.find('.cache-badge').text(overrideArchived.size || 0);
+  $btn
+    .prop('disabled', !hasCache)
+    .toggleClass('btn-outline-secondary', !hasCache)
+    .toggleClass('btn-warning', hasCache)
+    .attr('title', hasCache
+      ? 'Clear cached archived policy IDs (UI overrides)'
+      : 'No cached archived IDs');
 }
 
 // ---- Injected styles ----
@@ -553,28 +586,28 @@ $(function () {
   ensureDeployedStyles();
   installGlobalSearchHandler();
 
-  fetch('/api/deploy_cache')
-    .then(r => r.json())
-    .then(d => {
-      const ids = (d && Array.isArray(d.ids)) ? d.ids : [];
-      overrideDeployed = new Set(ids.map(String));
-    })
-    .catch(() => { overrideDeployed = new Set(); })
-    .finally(() => {
-      ensurePrettySwitch();
-      ensurePolicyButtons();
-      ensureGroupSelector();
-      ensureAutoRefreshToggle();
-      updateActionButtons();
-      updateClearCacheButton();
-      installRightResizer();
-      initPolicies();
-      setupResizeButtons();
-      applyDefaultColumns();
-      installMainResizer();
-      applyLeftRightWidths();
-      $('.container-fluid .row.mt-3').addClass('two-pane-nowrap');
-    });
+  Promise.all([
+    fetch('/api/deploy_cache').then(r => r.json()).catch(() => ({ ids: [] })),
+    fetch('/api/archive_cache').then(r => r.json()).catch(() => ({ ids: [] }))
+  ]).then(([deployData, archiveData]) => {
+    overrideDeployed = new Set(((deployData && deployData.ids) || []).map(String));
+    overrideArchived = new Set(((archiveData && archiveData.ids) || []).map(String));
+  }).finally(() => {
+    ensurePrettySwitch();
+    ensurePolicyButtons();
+    ensureGroupSelector();
+    ensureAutoRefreshToggle();
+    updateActionButtons();
+    updateClearCacheButton();
+    updateClearArchiveCacheButton();
+    installRightResizer();
+    initPolicies();
+    setupResizeButtons();
+    applyDefaultColumns();
+    installMainResizer();
+    applyLeftRightWidths();
+    $('.container-fluid .row.mt-3').addClass('two-pane-nowrap');
+  });
 
   // Auto-select 1st policy (when no global search), else load global events table
   $('#policy-table').on('xhr.dt', function () {
@@ -672,12 +705,106 @@ $(function () {
       .catch(() => alert('Failed to clear server cache'));
   });
 
+  // Clear Archive Cache
+  $(document).on('click', '#clear-archive-cache', function () {
+    if (!confirm('This will clear the server archive cache used to override Deployed → Archived.\n\nProceed?')) return;
+    clearArchiveCacheSilently()
+      .then(() => {
+        if (policyTable) policyTable.ajax.reload(null, false);
+        alert('Server archive cache cleared.\n\nReload policies_export.csv to reflect upstream truth.');
+      })
+      .catch(() => alert('Failed to clear server archive cache'));
+  });
+
+  // Archive flow
+  $(document).on('click', '#archive-selected-policies', async function () {
+    if (selectedArchivePolicies.size === 0) {
+      alert('No policies selected.\n\nSelect at least one policy to archive.');
+      return;
+    }
+
+    const baseUrl = ($('#registry-url').val() || '').trim();
+    const user = ($('#registry-username').val() || '').trim();
+    const pass = $('#registry-password').val() || '';
+
+    if (!baseUrl) { alert('Registry URL is required.'); return; }
+    if (!user && !pass) {
+      if (!confirm('No username/password provided.\n\nProceed without authentication?')) return;
+    }
+
+    const toArchive = Array.from(selectedArchivePolicies);
+
+    // Show comment dialog — resolves with comment string or null if cancelled
+    const comment = await showArchiveCommentDialog(toArchive.length);
+    if (comment === null) return; // user cancelled
+
+    const $btn = $('#archive-selected-policies').prop('disabled', true);
+    $btn.html('<i class="bi bi-archive"></i> Archiving… <span class="count-badge" aria-hidden="true">' + toArchive.length + '</span>');
+
+    try {
+      const results = await archivePoliciesBatched(toArchive, { url: baseUrl, user, pass, comment });
+
+      results.ok.forEach(id => {
+        id = String(id);
+        overrideArchived.add(id);
+        overrideDeployed.delete(id); // archived supersedes deployed
+        selectedPolicies.delete(id);
+        selectedArchivePolicies.delete(id);
+      });
+
+      fetch('/api/archive_cache', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ ids: results.ok })
+      }).catch(() => {});
+
+      updateClearArchiveCacheButton();
+      updateClearCacheButton();
+      updateActionButtons();
+      clearAllSelectionsUI();
+      __suppressRestoreSelection = true;
+
+      if (policyTable) {
+        policyTable.ajax.reload(function () {
+          restoreSelectionAfterRefresh();
+        }, false);
+      }
+
+      const okCount = results.ok.length;
+      const failCount = results.fail.length;
+      if (okCount > 0 && failCount === 0) {
+        showNotification(`Successfully archived ${okCount} polic${okCount === 1 ? 'y' : 'ies'}`, 'success', 5000);
+      } else if (okCount > 0 && failCount > 0) {
+        showNotification(`Archived ${okCount}, ${failCount} failed`, 'warning', 5000);
+      } else if (okCount === 0 && failCount > 0) {
+        showNotification(`Failed to archive ${failCount} polic${failCount === 1 ? 'y' : 'ies'}`, 'error', 5000);
+      }
+
+      let msg = 'Archive completed.\n\nSucceeded: ' + okCount + '\nFailed:    ' + failCount;
+      if (failCount) {
+        const list = results.fail.slice(0, 25).map(e =>
+          `${e.id} [${e.status}]${e.error ? ' - ' + e.error : ''}`
+        ).join('\n');
+        msg += '\n\nFailures (up to 25):\n' + list;
+      }
+      msg += '\n\nNext steps:\n1) Reload policies_export.csv so upstream data reflects new states.\n2) Clear the archive cache to remove stale UI overrides.';
+      alert(msg);
+    } catch (e) {
+      console.error(e);
+      showNotification('Archive failed: ' + (e && e.message ? e.message : e), 'error', 5000);
+      alert('Archive failed: ' + (e && e.message ? e.message : e));
+    } finally {
+      $btn.prop('disabled', selectedArchivePolicies.size === 0)
+        .html('<i class="bi bi-archive"></i> Archive Selected <span class="count-badge" aria-hidden="true">0</span>');
+    }
+  });
+
   // Deploy flow
   $(document).on('click', '#deploy-selected-policies', async function () {
     refreshSelectedStatesFromVisiblePage();
 
     if (selectedPolicies.size === 0) {
-      alert('No policies selected.\n\nSelect at least one UNDEPLOYED policy to deploy.');
+      alert('No policies selected.\n\nSelect at least one undeployed or archived policy to deploy.');
       return;
     }
     const n = selectedPolicies.size || 0;
@@ -689,15 +816,16 @@ $(function () {
     const all = Array.from(selectedPolicies);
     const deployed = [], undeployed = [], unknown = [];
     all.forEach(id => {
+      // Archived policies always need re-activation — treat as undeployed regardless of CSV state
+      if (overrideArchived.has(id)) { undeployed.push(id); return; }
       if (!selectedPolicyStates.has(id)) unknown.push(id);
       else if (selectedPolicyStates.get(id)) deployed.push(id);
       else undeployed.push(id);
     });
 
-    if (undeployed.length === 0) {
+    if (undeployed.length === 0 && unknown.length === 0) {
       let msg = 'All selected policies are already deployed.\n\nUncheck these:\n' +
         (deployed.length ? '\n' + deployed.join('\n') : '\n— none —');
-      if (unknown.length) msg += '\n\nStatus unknown (off-page):\n' + unknown.join('\n');
       alert(msg);
       return;
     }
@@ -728,11 +856,17 @@ $(function () {
         console.groupEnd();
       }
 
+      const redeployedFromArchive = [];
       results.ok.forEach(id => {
         id = String(id);
         overrideDeployed.add(id);
         selectedPolicyStates.set(id, true);
         selectedPolicies.delete(id);
+        // If this was archived, un-archive it now that it's active again
+        if (overrideArchived.has(id)) {
+          overrideArchived.delete(id);
+          redeployedFromArchive.push(id);
+        }
       });
 
       fetch('/api/deploy_cache', {
@@ -741,7 +875,17 @@ $(function () {
         body: JSON.stringify({ ids: results.ok })
       }).catch(() => { });
 
+      // Remove re-deployed IDs from the server archive cache
+      if (redeployedFromArchive.length) {
+        fetch('/api/archive_cache', {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids: redeployedFromArchive })
+        }).catch(() => { });
+      }
+
       updateClearCacheButton();
+      updateClearArchiveCacheButton();
       updateActionButtons();
 
       clearAllSelectionsUI();
@@ -952,19 +1096,7 @@ function showPayloadPane(show) {
 }
 
 function initPolicies() {
-  // Ensure extra headers exist BEFORE DataTable init
-  const $theadRow = $('#policy-table thead tr');
-  if ($theadRow.length) {
-    const $ths = $theadRow.children('th');
-    let $selectTh = $theadRow.find('th.select-col');
-    if ($selectTh.length === 0) {
-      $selectTh = $ths.length ? $ths.last().addClass('text-center select-col').empty()
-        : $('<th class="text-center select-col"></th>').appendTo($theadRow);
-    }
-    if ($theadRow.find('th.enabled-col').length === 0) {
-      $('<th class="text-center enabled-col">Deployed</th>').insertBefore($selectTh);
-    }
-  }
+  // Headers are defined statically in viewer.html — no runtime manipulation needed
 
   policyTable = $('#policy-table').DataTable({
     serverSide: true,
@@ -976,11 +1108,17 @@ function initPolicies() {
         const term = ($('#events-global-search').val() || '').trim();
         if (term) d.global_search = term; else delete d.global_search;
         d.group_id = currentGroup();
-        
-        // Add advanced filter if active (check global AdvancedFilter object)
+
+        // Add events advanced filter if active
         if (typeof AdvancedFilter !== 'undefined' && AdvancedFilter.activeFilterJSON) {
           d.advancedFilter = AdvancedFilter.activeFilterJSON;
-          console.log('[PolicyTable] Adding advancedFilter to request:', AdvancedFilter.activeFilterJSON);
+        }
+
+        // Add policy advanced filter if active
+        if (typeof PolicyFilter !== 'undefined' && PolicyFilter.isActive && PolicyFilter.conditions.length) {
+          d.policyFilter = JSON.stringify({ conditions: PolicyFilter.conditions, logic: PolicyFilter.logic });
+        } else {
+          delete d.policyFilter;
         }
       },
       dataSrc: function(json) {
@@ -1055,12 +1193,28 @@ function initPolicies() {
         className: 'text-center align-middle',
         render: function (_d, type, row) {
           const id = row && row.policy_id ? String(row.policy_id) : '';
+          const isArchived = overrideArchived.has(id);
           let val = resolveDeployedFlagFromRow(row);
           if (overrideDeployed.has(id)) val = true;
-          if (type === 'sort') return val ? 1 : 0;
+          if (type === 'sort') return isArchived ? 2 : (val ? 1 : 0);
+          if (isArchived) return '<span class="deployed-archived">Archived</span>';
           const cls = val ? 'deployed-yes' : 'deployed-no';
           const txt = val ? 'Yes' : 'No';
           return '<span class="' + cls + '">' + txt + '</span>';
+        }
+      },
+      {
+        // Comment column — truncated with full text on hover
+        data: 'comment_text',
+        className: 'policy-comment-col',
+        render: function (d, type) {
+          if (type !== 'display') return d || '';
+          const txt = d || '';
+          if (!txt) return '<span class="text-muted">—</span>';
+          const safe = txt.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+          const short = txt.length > 30 ? txt.slice(0, 30) + '…' : txt;
+          const safeShort = short.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+          return '<span title="' + safe + '" style="cursor:default;">' + safeShort + '</span>';
         }
       },
       {
@@ -1069,18 +1223,27 @@ function initPolicies() {
           if (type !== 'display') return '';
           const id = row && row.policy_id ? String(row.policy_id) : '';
           const safe = encodeURIComponent(id);
-          const selectable = isRowSelectable(row);
-          if (!selectable && id) selectedPolicies.delete(id);
-          const checked = selectable && id && selectedPolicies.has(id) ? ' checked' : '';
-          const disabled = selectable ? '' : ' disabled title="Already deployed"';
-          return '<input type="checkbox" class="form-check-input policy-select" data-id="' + safe + '"' + checked + disabled + '>';
+
+          const deployable = isRowSelectable(row);   // undeployed OR archived (both can be deployed)
+          const archivable = isRowArchivable(row);   // anything not already archived
+
+          // Keep sets consistent with what is actually visible
+          if (!deployable && id) selectedPolicies.delete(id);
+          if (!archivable && id) selectedArchivePolicies.delete(id);
+
+          const deployChecked = deployable && id && selectedPolicies.has(id);
+          const archiveChecked = archivable && id && selectedArchivePolicies.has(id);
+          // A row is checked if it is in either set
+          const checked = (deployChecked || archiveChecked) ? ' checked' : '';
+
+          return '<input type="checkbox" class="form-check-input policy-select" data-id="' + safe + '"' + checked + '>';
         }
       }
     ],
     order: [[1, 'desc']],
     pageLength: 25,
     lengthMenu: [[10, 25, 50, 100, 200, 500, 1000], [10, 25, 50, 100, 200, 500, 1000]],
-    autoWidth: true,
+    autoWidth: false,
     responsive: false,
     deferRender: true,
     searchDelay: 400,
@@ -1090,8 +1253,11 @@ function initPolicies() {
     scrollCollapse: true,
     scrollX: true,
     columnDefs: [
-      { targets: 4, width: 90 },
-      { targets: 5, width: 60 }
+      { targets: 0, width: 410 },
+      { targets: 3, width: 76 },
+      { targets: 4, width: 120 },
+      { targets: 5, width: 120 },
+      { targets: 6, width: 60 }
     ],
     createdRow: function (row, data) {
       const id = data && data.policy_id ? String(data.policy_id) : '';
@@ -1108,9 +1274,11 @@ function initPolicies() {
       const row = policyTable.row(this).data();
       const id = row && row.policy_id ? String(row.policy_id) : '';
       const $cb = $(this).find('input.policy-select');
-      const selectable = isRowSelectable(row);
-      $cb.prop('disabled', !selectable).attr('title', selectable ? '' : 'Already deployed');
-      $cb.prop('checked', selectable && id && selectedPolicies.has(id));
+
+      const deployable = isRowSelectable(row);
+      const archivable = isRowArchivable(row);
+      const isChecked = (deployable && selectedPolicies.has(id)) || (archivable && selectedArchivePolicies.has(id));
+      $cb.prop({ disabled: false, checked: isChecked }).attr('title', '');
     });
 
     purgeUnselectableFromSelection();
@@ -1126,7 +1294,9 @@ function initPolicies() {
   });
 
   hookResizing($('#policy-table'), 'policy-table', policyTable);
-  setDefaultWidths($('#policy-table'), 'policy-table', { 0: 310, 2: 70, 3: 40, 4: 80, 5: 40 });
+  policyTable.one('draw.dt', function () {
+    setDefaultWidths($('#policy-table'), 'policy-table', { 0: 420, 2: 70, 3: 48, 4: 120, 5: 120, 6: 40 });
+  });
 
   // Select-all (page)
   $(document)
@@ -1140,17 +1310,17 @@ function initPolicies() {
         const id = row && row.policy_id ? String(row.policy_id) : '';
         if (!id) return;
 
-        if (!isRowSelectable(row)) {
-          selectedPolicies.delete(id);
-          return;
-        }
         const deployed = resolveDeployedFlagFromRow(row);
+        const deployable = isRowSelectable(row);
+        const archivable = isRowArchivable(row);
+
         if (checked) {
-          selectedPolicies.add(id);
-          selectedPolicyStates.set(id, deployed);
+          if (deployable) { selectedPolicies.add(id); selectedPolicyStates.set(id, deployed); }
+          if (archivable) selectedArchivePolicies.add(id);
         } else {
           selectedPolicies.delete(id);
           selectedPolicyStates.delete(id);
+          selectedArchivePolicies.delete(id);
         }
       });
 
@@ -1161,7 +1331,7 @@ function initPolicies() {
       updateActionButtons();
     });
 
-  // Individual checkbox
+  // Individual checkbox — updates BOTH deploy and archive sets based on row eligibility
   $('#policy-table tbody').off('change', 'input.policy-select')
     .on('change', 'input.policy-select', function (e) {
       e.stopPropagation();
@@ -1170,13 +1340,16 @@ function initPolicies() {
 
       const row = policyTable.row($(this).closest('tr')).data() || null;
       const deployed = resolveDeployedFlagFromRow(row);
+      const deployable = isRowSelectable(row);
+      const archivable = isRowArchivable(row);
 
       if (this.checked) {
-        selectedPolicies.add(id);
-        selectedPolicyStates.set(id, deployed);
+        if (deployable) { selectedPolicies.add(id); selectedPolicyStates.set(id, deployed); }
+        if (archivable) selectedArchivePolicies.add(id);
       } else {
         selectedPolicies.delete(id);
         selectedPolicyStates.delete(id);
+        selectedArchivePolicies.delete(id);
       }
       updateSelectAllState();
       updateActionButtons();
@@ -1245,10 +1418,9 @@ function purgeUnselectableFromSelection() {
   const data = getCurrentPageData();
   data.forEach(row => {
     const id = row && row.policy_id ? String(row.policy_id) : '';
-    if (id && !isRowSelectable(row)) {
-      selectedPolicies.delete(id);
-      selectedPolicyStates.delete(id);
-    }
+    if (!id) return;
+    if (!isRowSelectable(row)) { selectedPolicies.delete(id); selectedPolicyStates.delete(id); }
+    if (!isRowArchivable(row)) selectedArchivePolicies.delete(id);
   });
 }
 
@@ -1257,8 +1429,9 @@ function updateSelectAllState() {
   if ($selectAll.length === 0) return;
 
   const data = getCurrentPageData();
-  const selectable = data.filter(isRowSelectable);
-  const total = selectable.length;
+  // Any non-archived row counts toward the select-all (deploy or archive)
+  const checkable = data.filter(row => isRowSelectable(row) || isRowArchivable(row));
+  const total = checkable.length;
 
   if (!total) {
     $selectAll.prop({ checked: false, indeterminate: false, disabled: true });
@@ -1267,9 +1440,9 @@ function updateSelectAllState() {
   $selectAll.prop('disabled', false);
 
   let checkedCount = 0;
-  selectable.forEach(row => {
+  checkable.forEach(row => {
     const id = row && row.policy_id ? String(row.policy_id) : '';
-    if (id && selectedPolicies.has(id)) checkedCount++;
+    if (id && (selectedPolicies.has(id) || selectedArchivePolicies.has(id))) checkedCount++;
   });
 
   if (checkedCount === 0) $selectAll.prop({ checked: false, indeterminate: false });
@@ -2346,15 +2519,25 @@ function setDeployCapHint(show, count = 0) {
 
 function isRowSelectable(row) {
   const idOk = row && row.policy_id;
-  const deployed = resolveDeployedFlagFromRow(row);
   const id = idOk ? String(row.policy_id) : '';
+  // Archived rows ARE selectable for deploy (re-deploying reactivates them)
+  if (overrideArchived.has(id)) return !!idOk;
+  const deployed = resolveDeployedFlagFromRow(row);
   const effectiveDeployed = overrideDeployed.has(id) ? true : deployed;
   return idOk && !effectiveDeployed;
+}
+
+// Archive is open to both deployed and undeployed rows (anything not already archived)
+function isRowArchivable(row) {
+  const idOk = row && row.policy_id;
+  const id = idOk ? String(row.policy_id) : '';
+  return idOk && !overrideArchived.has(id);
 }
 
 function clearAllSelectionsUI() {
   selectedPolicies.clear();
   selectedPolicyStates.clear();
+  selectedArchivePolicies.clear();
   if (policyTable) {
     const nodes = policyTable.rows({ page: 'current' }).nodes();
     $(nodes).find('input.policy-select').prop('checked', false);
@@ -2366,65 +2549,87 @@ function clearAllSelectionsUI() {
 }
 
 function ensurePolicyButtons() {
-  const $hdr = $('#policy-container .card-header'); if (!$hdr.length) return;
-  $hdr.addClass('d-flex justify-content-between align-items-center');
-  let $ctr = $hdr.find('.policy-header-tools');
-  if (!$ctr.length) { $ctr = $('<div class="policy-header-tools d-flex align-items-center gap-2 ms-auto"></div>'); $hdr.append($ctr); }
+  if ($('#policy-action-toolbar').length) return;
 
-  if ($('#clear-deploy-cache').length === 0) {
-    $ctr.prepend(
-      '<button id="clear-deploy-cache" class="btn btn-sm btn-outline-secondary me-2" ' +
-      'title="No cached deployed IDs" disabled>' +
-      '<i class="bi bi-trash"></i> Clear Deploy Cache ' +
-      '<span class="cache-badge count-badge" aria-hidden="true">0</span></button>'
-    );
-  }
-  if ($('#deploy-selected-policies').length === 0) {
-    $ctr.prepend(
-      '<button id="deploy-selected-policies" class="btn btn-sm btn-primary me-2" ' +
-      'title="Deploy selected undeployed policies" aria-live="polite" aria-disabled="true" disabled>' +
-      '<i class="bi bi-rocket-takeoff"></i> Deploy Selected ' +
-      '<span class="count-badge" aria-hidden="true">0</span></button>'
-    );
-  }
-  if ($('#export-selected-policies').length) {
-    $ctr.append($('#export-selected-policies').detach()
-      .addClass('btn btn-sm btn-success')
-      .attr('title', 'Export selected Policy IDs')
-      .html('<i class="bi bi-download"></i> Export Selected <span class="count-badge" aria-hidden="true">0</span>'));
-  } else {
-    $ctr.append(
-      '<button id="export-selected-policies" class="btn btn-sm btn-success" title="Export selected Policy IDs">' +
-      '<i class="bi bi-download"></i> Export Selected <span class="count-badge" aria-hidden="true">0</span></button>'
-    );
-  }
+  const $cardBody = $('#policy-container .card-body');
+  if (!$cardBody.length) return;
+
+  const toolbar = `
+    <div id="policy-action-toolbar" class="policy-action-toolbar">
+      <div class="pat-group">
+        <button id="deploy-selected-policies"
+          class="btn btn-sm btn-primary pat-btn"
+          title="Deploy selected undeployed policies" aria-live="polite" aria-disabled="true" disabled>
+          <i class="bi bi-rocket-takeoff"></i> Deploy
+          <span class="count-badge" aria-hidden="true">0</span>
+        </button>
+        <button id="archive-selected-policies"
+          class="btn btn-sm btn-archive pat-btn"
+          title="Archive selected policies" aria-live="polite" aria-disabled="true" disabled>
+          <i class="bi bi-archive"></i> Archive
+          <span class="count-badge" aria-hidden="true">0</span>
+        </button>
+        <button id="export-selected-policies"
+          class="btn btn-sm btn-success pat-btn"
+          title="Export selected Policy IDs">
+          <i class="bi bi-download"></i> Export
+          <span class="count-badge" aria-hidden="true">0</span>
+        </button>
+      </div>
+      <!-- Cache buttons hidden: cache is now cleared automatically by process_policies_and_events.py
+      <div class="pat-sep"></div>
+      <div class="pat-group">
+        <button id="clear-deploy-cache"
+          class="btn btn-sm btn-outline-secondary pat-btn pat-cache-btn"
+          title="No cached deployed IDs" disabled>
+          <i class="bi bi-trash"></i> Deploy Cache
+          <span class="cache-badge count-badge" aria-hidden="true">0</span>
+        </button>
+        <button id="clear-archive-cache"
+          class="btn btn-sm btn-outline-secondary pat-btn pat-cache-btn"
+          title="No cached archived IDs" disabled>
+          <i class="bi bi-trash"></i> Archive Cache
+          <span class="cache-badge count-badge" aria-hidden="true">0</span>
+        </button>
+      </div>
+      -->
+    </div>`;
+
+  $cardBody.prepend(toolbar);
 }
 
 function updateActionButtons() {
-  const n = selectedPolicies.size || 0;
+  const nDeploy = selectedPolicies.size || 0;
+  const nArchive = selectedArchivePolicies.size || 0;
+  const nExport = Math.max(nDeploy, nArchive); // export uses whichever has selections
   const $deploy = $('#deploy-selected-policies');
+  const $archive = $('#archive-selected-policies');
   const $export = $('#export-selected-policies');
 
-  $deploy.find('.count-badge').text(n);
-  $export.find('.count-badge').text(n);
+  $deploy.find('.count-badge').text(nDeploy);
+  $archive.find('.count-badge').text(nArchive);
+  $export.find('.count-badge').text(nExport);
 
-  const overCap = n > MAX_DEPLOY_SELECTION;
-  const disableDeploy = (n === 0) || overCap;
+  const overCap = nDeploy > MAX_DEPLOY_SELECTION;
+  const disableDeploy = (nDeploy === 0) || overCap;
 
   if (overCap && !__overCapNotified) {
-    showNotification(`You selected ${n} policies; max per deploy is ${MAX_DEPLOY_SELECTION}.`, 'warning', 5000);
+    showNotification(`You selected ${nDeploy} policies; max per deploy is ${MAX_DEPLOY_SELECTION}.`, 'warning', 5000);
     __overCapNotified = true;
   }
   if (!overCap && __overCapNotified) __overCapNotified = false;
 
-  setDeployCapHint(overCap, n);
+  setDeployCapHint(overCap, nDeploy);
 
   $deploy.prop('disabled', disableDeploy).attr('aria-disabled', disableDeploy)
     .attr('title', overCap
-      ? `You selected ${n} policies. Max per deploy is ${MAX_DEPLOY_SELECTION}.`
-      : (n === 0 ? 'Select at least one undeployed policy' : 'Deploy selected undeployed policies'));
+      ? `You selected ${nDeploy} policies. Max per deploy is ${MAX_DEPLOY_SELECTION}.`
+      : (nDeploy === 0 ? 'Select at least one undeployed policy' : 'Deploy selected undeployed policies'));
 
-  $export.prop('disabled', n === 0).attr('aria-disabled', n === 0);
+  $archive.prop('disabled', nArchive === 0).attr('aria-disabled', nArchive === 0)
+    .attr('title', nArchive === 0 ? 'Select at least one policy to archive' : `Archive ${nArchive} selected policies`);
+
+  $export.prop('disabled', nExport === 0).attr('aria-disabled', nExport === 0);
 }
 
 function ensurePolicySearchBox() {
@@ -2432,20 +2637,379 @@ function ensurePolicySearchBox() {
   const $length = $wrap.find('.dataTables_length'); if (!$length.length) return;
   $length.addClass('d-inline-flex align-items-center flex-nowrap me-3 mb-2');
   if ($wrap.find('#policy-search').length) return;
-  const $box = $('<label class="policy-length-search d-inline-flex align-items-center flex-nowrap mb-2 ms-1"><span class="me-2">Search</span><input type="text" id="policy-search" class="form-control form-control-sm" placeholder="policies…" style="width:240px;"></label>');
-  $box.insertAfter($length);
+
+  // Search input + Advanced Filter button side by side (mirrors events toolbar)
+  const $row = $('<div class="d-inline-flex align-items-center flex-nowrap gap-2 mb-2 ms-1"></div>');
+  const $box = $('<label class="policy-length-search d-inline-flex align-items-center flex-nowrap"><span class="me-2">Search</span><input type="text" id="policy-search" class="form-control form-control-sm" placeholder="policies…" style="width:200px;"></label>');
+  const $btn = $('<button id="open-policy-filter" class="btn btn-sm btn-primary" title="Open policy filter builder" style="white-space:nowrap;"><i class="bi bi-funnel"></i> Advanced Filter</button>');
+  $row.append($box).append($btn);
+  $row.insertAfter($length);
+
   let deb;
   $(document).off('input.policySearch').on('input.policySearch', '#policy-search', function () {
     const val = this.value; clearTimeout(deb);
     deb = setTimeout(function () { if (policyTable) policyTable.search(val).draw(); }, 250);
   });
+
+  PolicyFilter.init();
 }
+
+/* =========================================================
+   Policy Advanced Filter — modal matching events AF style
+   ========================================================= */
+var PolicyFilter = {
+  conditions: [],
+  logic: 'AND',
+  isActive: false,
+
+  // Column definitions
+  columns: {
+    'policy_id':          { label: 'Policy ID',    type: 'string'  },
+    'ranking_score':      { label: 'Ranking',       type: 'number'  },
+    'event_count':        { label: 'Events',        type: 'number'  },
+    'event_occurrences':  { label: 'Occurrences',   type: 'number'  },
+    'deployed':           { label: 'Deployed',      type: 'boolean' },
+    'archived':           { label: 'Archived',      type: 'boolean' },
+    'comment_text':       { label: 'Comment',       type: 'string'  }
+  },
+
+  operators: {
+    string:  [
+      { value: 'contains',  label: 'Contains'        },
+      { value: '!contains', label: 'Does Not Contain' },
+      { value: '=',         label: 'Equals'          },
+      { value: '!=',        label: 'Not Equals'      },
+      { value: 'starts',    label: 'Starts With'     },
+      { value: 'ends',      label: 'Ends With'       }
+    ],
+    number:  [
+      { value: '>=', label: 'Greater or Equal (≥)' },
+      { value: '<=', label: 'Less or Equal (≤)'    },
+      { value: '=',  label: 'Equals (=)'           },
+      { value: '>',  label: 'Greater Than (>)'     },
+      { value: '<',  label: 'Less Than (<)'        },
+      { value: '!=', label: 'Not Equals (≠)'       }
+    ],
+    boolean: [
+      { value: 'yes', label: 'Yes' },
+      { value: 'no',  label: 'No'  }
+    ]
+  },
+
+  init: function () {
+    if (document.getElementById('policy-filter-modal')) return; // already created
+    this._createModal();
+    this._registerDTSearch();
+    this._attachEvents();
+  },
+
+  _createModal: function () {
+    const html = `
+      <div id="policy-filter-modal" class="advanced-filter-modal">
+        <div class="advanced-filter-content">
+          <div class="advanced-filter-header">
+            <h2>🔍 Policy Advanced Filter Builder</h2>
+            <button class="advanced-filter-close" id="pf-close">&times;</button>
+          </div>
+          <div class="advanced-filter-body">
+            <button class="add-condition-btn" id="pf-add-condition">+ Add Condition</button>
+            <div id="pf-conditions"></div>
+            <div class="filter-logic-selector" id="pf-logic-wrap" style="display:none;">
+              <label>Combine conditions with:</label>
+              <select id="pf-logic">
+                <option value="AND">AND (all must match)</option>
+                <option value="OR">OR (any can match)</option>
+              </select>
+            </div>
+            <div class="filter-summary">
+              <div class="filter-summary-title">Filter Preview</div>
+              <div class="filter-summary-text" id="pf-preview">
+                <span class="filter-summary-empty">No conditions added yet</span>
+              </div>
+            </div>
+          </div>
+          <div class="advanced-filter-footer">
+            <button class="clear-filters-btn" id="pf-clear-all">Clear All</button>
+            <div style="display:flex;gap:12px;">
+              <button class="cancel-btn" id="pf-cancel">Cancel</button>
+              <button class="apply-filter-btn" id="pf-apply">Apply Filter</button>
+            </div>
+          </div>
+        </div>
+      </div>`;
+    document.body.insertAdjacentHTML('beforeend', html);
+  },
+
+  _registerDTSearch: function () {
+    if ($.fn.dataTable.ext.search.some(fn => fn._policyAdv)) return;
+    const self = this;
+    const fn = function (settings, _data, _idx, row) {
+      if (!settings.nTable || settings.nTable.id !== 'policy-table') return true;
+      if (!self.isActive || !self.conditions.length) return true;
+      return self._matchRow(row);
+    };
+    fn._policyAdv = true;
+    $.fn.dataTable.ext.search.push(fn);
+  },
+
+  _attachEvents: function () {
+    const self = this;
+    // Open
+    $(document).off('click.policyFilter').on('click.policyFilter', '#open-policy-filter', function () {
+      self.open();
+    });
+    // Close / Cancel
+    $(document).on('click', '#pf-close, #pf-cancel', function () { self.close(); });
+    // Backdrop
+    $(document).on('click', '#policy-filter-modal', function (e) {
+      if (e.target.id === 'policy-filter-modal') self.close();
+    });
+    // Add condition
+    $(document).on('click', '#pf-add-condition', function () { self.addCondition(); });
+    // Clear all
+    $(document).on('click', '#pf-clear-all', function () { self.clearAll(); });
+    // Apply
+    $(document).on('click', '#pf-apply', function () { self.apply(); });
+    // Logic
+    $(document).on('change', '#pf-logic', function () {
+      self.logic = this.value; self._updatePreview();
+    });
+    // Remove condition (delegated)
+    $(document).on('click', '.pf-remove-btn', function () {
+      const id = $(this).data('id');
+      self.conditions = self.conditions.filter(c => c.id !== id);
+      self._renderConditions();
+    });
+    // Column change (delegated)
+    $(document).on('change', '.pf-col-select', function () {
+      const id = $(this).data('id');
+      const c = self.conditions.find(c => c.id === id); if (!c) return;
+      c.column = this.value;
+      c.operator = self.operators[self.columns[c.column].type][0].value;
+      c.value = '';
+      self._renderConditions();
+    });
+    // Operator change (delegated)
+    $(document).on('change', '.pf-op-select', function () {
+      const id = $(this).data('id');
+      const c = self.conditions.find(c => c.id === id); if (!c) return;
+      c.operator = this.value;
+      self._updatePreview();
+    });
+    // Value change (delegated)
+    $(document).on('input change', '.pf-val-input, .pf-val-select', function () {
+      const id = $(this).data('id');
+      const c = self.conditions.find(c => c.id === id); if (!c) return;
+      c.value = this.value;
+      self._updatePreview();
+    });
+    // Badge X click
+    $(document).on('click', '#pf-active-badge-x', function (e) {
+      e.stopPropagation(); self.clearActive();
+    });
+    // Badge click (re-open)
+    $(document).on('click', '#pf-active-badge', function (e) {
+      if (e.target.id !== 'pf-active-badge-x') self.open();
+    });
+  },
+
+  open: function () {
+    if (this.conditions.length === 0) this.addCondition();
+    document.getElementById('policy-filter-modal').classList.add('show');
+  },
+
+  close: function () {
+    document.getElementById('policy-filter-modal').classList.remove('show');
+  },
+
+  addCondition: function () {
+    const firstCol = Object.keys(this.columns)[0];
+    this.conditions.push({
+      id: 'pfc-' + Date.now(),
+      column: firstCol,
+      operator: this.operators[this.columns[firstCol].type][0].value,
+      value: ''
+    });
+    this._renderConditions();
+  },
+
+  clearAll: function () {
+    this.conditions = [];
+    this.logic = 'AND';
+    this._renderConditions();
+  },
+
+  clearActive: function () {
+    this.isActive = false;
+    this.conditions = [];
+    this.logic = 'AND';
+    this._renderConditions();
+    this._updateBadge();
+    if (policyTable) policyTable.ajax.reload(null, false);
+  },
+
+  apply: function () {
+    // Sync values from DOM
+    document.querySelectorAll('.pf-val-input, .pf-val-select').forEach(el => {
+      const id = el.dataset.id;
+      const c = this.conditions.find(c => c.id === id);
+      if (c) c.value = el.value;
+    });
+    const invalid = this.conditions.filter(c => c.value === '' || c.value === null || c.value === undefined);
+    if (this.conditions.length > 0 && invalid.length > 0) {
+      alert('Please fill in all condition values before applying the filter.');
+      return;
+    }
+    if (this.conditions.length === 0) {
+      this.clearActive();
+      this.close();
+      return;
+    }
+    this.isActive = true;
+    this._updateBadge();
+    this.close();
+    // Server-side table — must reload (not just draw) to push filter to the server
+    if (policyTable) policyTable.ajax.reload(null, false);
+  },
+
+  _renderConditions: function () {
+    const $c = $('#pf-conditions').empty();
+    this.conditions.forEach(cond => {
+      const colType = this.columns[cond.column].type;
+      const ops = this.operators[colType];
+
+      const colOpts = Object.entries(this.columns).map(([k, v]) =>
+        `<option value="${k}" ${cond.column === k ? 'selected' : ''}>${v.label}</option>`
+      ).join('');
+      const opOpts = ops.map(o =>
+        `<option value="${o.value}" ${cond.operator === o.value ? 'selected' : ''}>${o.label}</option>`
+      ).join('');
+
+      let valHtml;
+      if (colType === 'boolean') {
+        valHtml = `<select class="pf-val-select" data-id="${cond.id}" style="padding:8px 12px;border:1px solid #8d8d8d;border-radius:4px;font-size:14px;background:#fff;flex:1;">
+          <option value="yes" ${cond.value === 'yes' ? 'selected' : ''}>Yes</option>
+          <option value="no"  ${cond.value === 'no'  ? 'selected' : ''}>No</option>
+        </select>`;
+      } else {
+        const itype = colType === 'number' ? 'number' : 'text';
+        const ph    = colType === 'number' ? 'Enter number…' : 'Enter value…';
+        valHtml = `<input type="${itype}" class="pf-val-input" data-id="${cond.id}"
+          value="${(cond.value || '').replace(/"/g, '&quot;')}"
+          placeholder="${ph}" style="padding:8px 12px;border:1px solid #8d8d8d;border-radius:4px;font-size:14px;flex:1;" ${colType === 'number' ? 'min="0"' : ''}>`;
+      }
+
+      $c.append(`
+        <div class="filter-condition">
+          <div class="filter-condition-field">
+            <label>Column</label>
+            <select class="pf-col-select" data-id="${cond.id}">${colOpts}</select>
+          </div>
+          <div class="filter-condition-field">
+            <label>Operator</label>
+            <select class="pf-op-select" data-id="${cond.id}">${opOpts}</select>
+          </div>
+          <div class="filter-condition-field" style="flex:2;">
+            <label>Value</label>
+            ${valHtml}
+          </div>
+          <button class="remove-condition-btn pf-remove-btn" data-id="${cond.id}">Remove</button>
+        </div>`);
+    });
+
+    $('#pf-logic-wrap').css('display', this.conditions.length > 1 ? 'flex' : 'none');
+    $('#pf-logic').val(this.logic);
+    this._updatePreview();
+  },
+
+  _updatePreview: function () {
+    const $p = $('#pf-preview');
+    if (!this.conditions.length) {
+      $p.html('<span class="filter-summary-empty">No conditions added yet</span>'); return;
+    }
+    const parts = this.conditions.map(c => {
+      const col = (this.columns[c.column] || {}).label || c.column;
+      const op  = c.operator;
+      const val = c.value !== '' && c.value !== null && c.value !== undefined ? `'${c.value}'` : '(empty)';
+      return `${col} ${op} ${val}`;
+    });
+    $p.text(parts.join(` ${this.logic} `));
+  },
+
+  _updateBadge: function () {
+    const $btn = $('#open-policy-filter');
+    $('#pf-active-badge').remove(); // always rebuild cleanly
+    if (this.isActive && this.conditions.length) {
+      $btn.removeClass('btn-primary').addClass('btn-warning');
+      const n = this.conditions.length;
+      const label = `Filtered (${n} condition${n > 1 ? 's' : ''})`;
+      const $badge = $(`<span id="pf-active-badge" class="filter-active-badge ms-1" title="Click to edit policy filter">${label} <span id="pf-active-badge-x" style="margin-left:6px;cursor:pointer;font-weight:bold;" title="Clear filter">✕</span></span>`);
+      // Insert right after the search+button row
+      const $row = $btn.closest('div.d-inline-flex');
+      if ($row.length) $row.after($badge);
+      else $btn.after($badge);
+    } else {
+      $btn.removeClass('btn-warning').addClass('btn-primary');
+    }
+  },
+
+  _matchRow: function (row) {
+    const results = this.conditions.map(c => this._testCondition(c, row));
+    return this.logic === 'OR' ? results.some(Boolean) : results.every(Boolean);
+  },
+
+  _testCondition: function (c, row) {
+    const col = c.column;
+    const op  = c.operator;
+    const val = c.value;
+
+    if (col === 'deployed') {
+      const pid = String(row.policy_id || '');
+      const isArchived = overrideArchived.has(pid);
+      const isDeployed = !isArchived && (overrideDeployed.has(pid) || resolveDeployedFlagFromRow(row));
+      return op === 'yes' ? isDeployed : !isDeployed;
+    }
+    if (col === 'archived') {
+      const pid = String(row.policy_id || '');
+      const isArchived = overrideArchived.has(pid);
+      return op === 'yes' ? isArchived : !isArchived;
+    }
+
+    const rawVal = row[col];
+    if (this.columns[col].type === 'number') {
+      const a = parseFloat(rawVal), b = parseFloat(val);
+      if (isNaN(a) || isNaN(b)) return true;
+      switch (op) {
+        case '>=': return a >= b;
+        case '<=': return a <= b;
+        case '>':  return a > b;
+        case '<':  return a < b;
+        case '=':  return a === b;
+        case '!=': return a !== b;
+        default:   return true;
+      }
+    }
+
+    // string
+    const a = String(rawVal || '').toLowerCase();
+    const b = String(val || '').toLowerCase();
+    switch (op) {
+      case 'contains':  return a.includes(b);
+      case '!contains': return !a.includes(b);
+      case '=':         return a === b;
+      case '!=':        return a !== b;
+      case 'starts':    return a.startsWith(b);
+      case 'ends':      return a.endsWith(b);
+      default:          return true;
+    }
+  }
+};
 
 function applyDefaultColumns() {
   const allMd = Array.from({ length: 12 }, (_, i) => `col-md-${i + 1}`).join(' ');
-  $('#policy-container').removeClass(`d-none ${allMd} col-md-5-13 col-md-8-13`).addClass('col-md-5-13');
-  $('#events-container').removeClass(`d-none ${allMd} col-md-5-13 col-md-8-13`).addClass('col-md-8-13');
-  LEFT_SPLIT = (5 / 13); localStorage.setItem('leftSplit', LEFT_SPLIT.toFixed(4));
+  $('#policy-container').removeClass(`d-none ${allMd} col-md-5-13 col-md-8-13`).addClass('col-md-6');
+  $('#events-container').removeClass(`d-none ${allMd} col-md-5-13 col-md-8-13`).addClass('col-md-6');
+  LEFT_SPLIT = 0.5; localStorage.setItem('leftSplit', LEFT_SPLIT.toFixed(4));
   requestAnimationFrame(() => { applyLeftRightWidths(); layoutHeights(); });
 }
 
@@ -2718,6 +3282,169 @@ async function deployPoliciesBatched(ids, cfg) {
 
   hideDeployProgress();
   return { ok, fail, urls: {} }; // Ensure consistent return structure
+}
+
+/* ---- Archive batched ---- */
+
+/**
+ * Archives policies in batches with controlled concurrency (mirrors deployPoliciesBatched)
+ */
+async function archivePoliciesBatched(ids, cfg) {
+  if (!ids || !Array.isArray(ids) || ids.length === 0) return { ok: [], fail: [] };
+  if (!cfg || typeof cfg !== 'object' || !cfg.url) throw new Error('Invalid archive configuration');
+
+  const chunks = [];
+  for (let i = 0; i < ids.length; i += DEPLOY_BATCH_SIZE) chunks.push(ids.slice(i, i + DEPLOY_BATCH_SIZE));
+
+  let ok = [], fail = [];
+  let next = 0, inflight = 0;
+
+  showDeployProgress(ids.length);
+  // Re-label the toast for archive
+  const $toast = $('#deploy-progress');
+  if ($toast.length) $toast.find('div:first-child').text('Archiving policies…');
+
+  const runOne = async () => {
+    const batch = chunks[next++];
+    if (!batch) return;
+    inflight++;
+    updateDeployProgress({ done: ok.length, fail: fail.length, inflight, total: ids.length });
+    try {
+      const res = await archivePolicies(batch, cfg, DEPLOY_CONCURRENCY_PER_BATCH, DEPLOY_REQUEST_TIMEOUT_MS);
+      ok = ok.concat(Array.isArray(res.ok) ? res.ok.map(String) : []);
+      fail = fail.concat(Array.isArray(res.fail) ? res.fail : []);
+    } catch (e) {
+      fail = fail.concat(batch.map(id => ({ id: String(id), status: 'client', error: String(e).substring(0, 200) })));
+    } finally {
+      inflight--;
+      updateDeployProgress({ done: ok.length, fail: fail.length, inflight, total: ids.length });
+      if (next < chunks.length) return runOne();
+    }
+  };
+
+  const workerCount = Math.min(DEPLOY_MAX_INFLIGHT, chunks.length);
+  await Promise.all(Array.from({ length: workerCount }, () => runOne()));
+  hideDeployProgress();
+  return { ok, fail, urls: {} };
+}
+
+/**
+ * Sends archive PATCH requests via the backend proxy
+ */
+async function archivePolicies(ids, cfg, concurrency = DEPLOY_CONCURRENCY_PER_BATCH, clientTimeoutMs = DEPLOY_REQUEST_TIMEOUT_MS) {
+  if (!ids || !Array.isArray(ids) || ids.length === 0) return { ok: [], fail: [], urls: {} };
+  if (!cfg || typeof cfg !== 'object' || !cfg.url) {
+    return { ok: [], fail: ids.map(id => ({ id: String(id), status: 'error', error: 'Invalid configuration' })), urls: {} };
+  }
+
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new DOMException('timeout', 'AbortError')), clientTimeoutMs);
+
+  try {
+    const res = await fetch('/api/archive_policies', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        base_url: cfg.url,
+        username: cfg.user || '',
+        password: cfg.pass || '',
+        ids: ids,
+        comment: cfg.comment || 'Archived via Policy Viewer',
+        verify_tls: false,
+        timeout: Math.ceil(clientTimeoutMs / 2000),
+        concurrency
+      }),
+      signal: controller.signal
+    });
+
+    if (!res.ok) {
+      const text = await res.text().catch(() => '');
+      throw new Error('Backend archive call failed: ' + res.status + (text ? ' ' + text : ''));
+    }
+    const data = await res.json();
+    return { ok: Array.isArray(data.ok) ? data.ok : [], fail: Array.isArray(data.fail) ? data.fail : [], urls: data.urls || {} };
+  } catch (err) {
+    if (err && err.name === 'AbortError') {
+      const s = Math.round(clientTimeoutMs / 1000);
+      return { ok: [], fail: ids.map(id => ({ id: String(id), status: 'timeout', error: `Archive request timed out after ${s}s` })), urls: {} };
+    }
+    return { ok: [], fail: ids.map(id => ({ id: String(id), status: 'error', error: String(err).substring(0, 200) })), urls: {} };
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/* ---- Archive comment dialog ---- */
+
+/**
+ * Shows a modal dialog asking the user for an archive comment.
+ * Returns a Promise that resolves with the comment string (possibly empty),
+ * or null if the user cancelled.
+ */
+function showArchiveCommentDialog(count) {
+  return new Promise(resolve => {
+    $('#archive-comment-modal').remove();
+
+    const $modal = $(`
+      <div id="archive-comment-modal" style="
+        position:fixed; inset:0; z-index:10000;
+        background:rgba(0,0,0,.45);
+        display:flex; align-items:center; justify-content:center;">
+        <div style="
+          background:#fff; border-radius:8px; padding:24px 28px;
+          width:420px; max-width:95vw;
+          box-shadow:0 12px 32px rgba(0,0,0,.25);">
+          <h5 style="margin:0 0 6px; font-size:1rem; font-weight:600;">
+            <i class="bi bi-archive me-2" style="color:#e05c00;"></i>
+            Archive ${count} polic${count === 1 ? 'y' : 'ies'}
+          </h5>
+          <p style="margin:0 0 14px; font-size:.88rem; color:#555;">
+            This will set their state to <strong>Rejected/Archived</strong> in the Policy Registry.
+          </p>
+          <label for="archive-comment-input" style="font-size:.88rem; font-weight:500; display:block; margin-bottom:4px;">
+            Comment <span style="color:#888; font-weight:400;">(optional)</span>
+          </label>
+          <input id="archive-comment-input" type="text"
+            class="form-control form-control-sm"
+            placeholder="Archived via Policy Viewer"
+            value="Archived via Policy Viewer"
+            maxlength="200"
+            style="margin-bottom:18px;">
+          <div style="display:flex; justify-content:flex-end; gap:8px;">
+            <button id="archive-comment-cancel" class="btn btn-sm btn-outline-secondary">Cancel</button>
+            <button id="archive-comment-confirm" class="btn btn-sm btn-archive">
+              <i class="bi bi-archive me-1"></i>Archive
+            </button>
+          </div>
+        </div>
+      </div>
+    `).appendTo('body');
+
+    // Focus the input and select all so user can type immediately
+    const $input = $modal.find('#archive-comment-input');
+    setTimeout(() => { $input.trigger('focus').trigger('select'); }, 50);
+
+    // Confirm on Enter
+    $input.on('keydown', function(e) {
+      if (e.key === 'Enter') { e.preventDefault(); confirm(); }
+      if (e.key === 'Escape') { cancel(); }
+    });
+
+    function confirm() {
+      const val = ($input.val() || '').trim() || 'Archived via Policy Viewer';
+      $modal.remove();
+      resolve(val);
+    }
+    function cancel() {
+      $modal.remove();
+      resolve(null);
+    }
+
+    $modal.find('#archive-comment-confirm').on('click', confirm);
+    $modal.find('#archive-comment-cancel').on('click', cancel);
+    // Click backdrop to cancel
+    $modal.on('click', function(e) { if (e.target === this) cancel(); });
+  });
 }
 
 /* ---- Pretty switch ---- */

@@ -101,6 +101,21 @@ def _parse_json_cached(json_str: str) -> Optional[Dict]:
     except json.JSONDecodeError:
         return None
 
+def extract_comment_text(metadata_str: str) -> str:
+    """Extract commentText from metadata.statedata JSON field."""
+    if not metadata_str:
+        return ""
+    raw = metadata_str.replace('\\"', '"').replace('\\\\', '\\')
+    try:
+        obj = json.loads(raw)
+    except Exception:
+        return ""
+    if isinstance(obj, dict):
+        sd = obj.get("statedata", {})
+        if isinstance(sd, dict):
+            return str(sd.get("commentText", "") or "")
+    return ""
+
 def extract_ranking_score(metrics_str: str) -> Optional[int]:
     """Extract ranking score from metrics JSON string (optimized with caching and compiled regex)"""
     try:
@@ -221,6 +236,7 @@ def guess_indices_by_header(header_row: List[str]) -> Dict[str, int]:
         "type": find("type", 4),
         "configuration": find("configuration", 5),
         "groupid": find("groupid", 7),
+        "metadata": find("metadata", 10),
         "metrics": find("metrics", 11),
         "_has_header": 1
     }
@@ -727,7 +743,9 @@ def main() -> None:
             policy_type   = row[idx["type"]]         if idx["type"]         < len(row) else ""
             configuration = row[idx["configuration"]]if idx["configuration"]< len(row) else ""
             group_id_raw  = row[idx["groupid"]]      if idx["groupid"]      < len(row) else ""
+            metadata_raw  = row[idx["metadata"]]     if idx.get("metadata", 99) < len(row) else ""
             metrics       = row[idx["metrics"]]      if idx["metrics"]      < len(row) else ""
+            comment_text  = extract_comment_text(metadata_raw)
 
             if not policy_id:
                 skipped_count += 1
@@ -765,7 +783,8 @@ def main() -> None:
                     'group_id': group_norm,
                     'ranking_score': round((ranking_score or 0), 0),
                     'event_occurrences': event_occurrences,
-                    'event_ids': event_ids
+                    'event_ids': event_ids,
+                    'comment_text': comment_text,
                 })
 
             elif group_norm == GROUP_PATTERNS:
@@ -798,7 +817,8 @@ def main() -> None:
                     'group_id': group_norm,
                     'ranking_score': round((ranking_score or 0), 0),
                     'event_occurrences': event_occurrences,
-                    'event_ids': []
+                    'event_ids': [],
+                    'comment_text': comment_text,
                 })
             
     # Processing complete - show summary
@@ -997,7 +1017,8 @@ def main() -> None:
             'policy_type': p['policy_type'],
             'policy_set': p['policy_set'],
             'group_id': p['group_id'],
-            'event_ids_in_config': ", ".join(p['event_ids']) if p['event_ids'] else ""
+            'event_ids_in_config': ", ".join(p['event_ids']) if p['event_ids'] else "",
+            'comment_text': p.get('comment_text', ''),
         })
 
     policy_summary.sort(key=lambda x: (x['ranking_score'] or 0), reverse=True)
@@ -1087,6 +1108,12 @@ def main() -> None:
     signal_path = os.path.join(output_dir, "data_updated.signal")
     Path(signal_path).touch()
     print(f"[INFO] Touched signal file: {signal_path}")
+
+    # Remove stale deploy/archive cache files so the UI reflects fresh data
+    for cache_file in ("deployed_cache.json", "archived_cache.json"):
+        if os.path.exists(cache_file):
+            print(f"[INFO] Deleting cache file: {cache_file}")
+            os.remove(cache_file)
 
     if args.web:
         try:

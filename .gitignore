@@ -1,0 +1,9 @@
+*.csv
+output/*
+*.log
+run
+deployed_cache.json
+
+api_url_login.txt
+archived_cache.json
+logs/auto_update.pid

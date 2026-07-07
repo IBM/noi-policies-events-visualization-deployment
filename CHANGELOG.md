@@ -7,6 +7,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Correct Comment column header showing "Deployed" label due to runtime `<thead>`
+  manipulation misaligning DataTables column-to-header mapping
+- Remove `font-size: 0.75rem` and `color: #555` overrides from `.policy-comment-col`
+  so the Comment column matches the font and colour of all other table columns
+
+### Changed
+- Policy table column widths: Policy ID → 450px, Deployed → 120px, Occs → 48px
+- Set `autoWidth: false` on the policy DataTable so `columnDefs` widths are respected
+- Defer `setDefaultWidths` call to the first `draw.dt` event so column widths apply
+  correctly with server-side processing
+- Hide Deploy Cache and Archive Cache toolbar buttons (now managed automatically)
+- Auto-delete `deployed_cache.json` and `archived_cache.json` at the end of
+  `process_policies_and_events.py` so the UI always reflects fresh data
+- Default left/right panel split changed from 38% / 62% to 50% / 50%
+
+
 ### Security
 - Updated Python dependencies to address 21 vulnerabilities (4 high, 16 moderate, 1 low)
 - Updated scylla-driver from >=3.25.0 to >=3.29.1,<4.0.0

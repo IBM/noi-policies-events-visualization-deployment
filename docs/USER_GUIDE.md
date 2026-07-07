@@ -83,7 +83,7 @@ python manage_users.py change-password admin
 │                                                               │
 │  ┌─────────────────────────────────────────────────────┐   │
 │  │  Policy Browser                                      │   │
-│  │ [Deploy Selected] [Clear Deployed Cache] [Export Selected]                     │   │
+│  │ [Deploy Selected] [Archive Selected] [Export Selected]                         │   │
 │  │  ┌──────┬──────────┬───────┬────────┬──────────┐   │   │
 │  │  │ ID   │ Score    │ Count │ Type   │ Deployed │   │   │
 │  │  ├──────┼──────────┼───────┼────────┼──────────┤   │   │
@@ -509,26 +509,19 @@ Error: Connection refused
 Check network connectivity and credentials
 ```
 
-### Clear Deploy Cache
+### Deploy / Archive Cache
 
-The application maintains a cache of successfully deployed policies to prevent redundant deployments and improve performance.
+The application maintains server-side cache files (`deployed_cache.json`, `archived_cache.json`) to track policy states between data refreshes.
 
-**Deploy Cache Button**:
-- Located in the Policy Summary toolbar (yellow button with trash icon)
-- Shows badge with number of cached policies (e.g., "30")
-- Click "Clear Deploy Cache" to reset the cache
-
-**When to Clear Cache**:
-- After manually undeploying policies through Policy Registry
-- When you want to re-deploy previously deployed policies
-- To refresh deployment status after external changes
-- Troubleshooting deployment issues
+**Automatic cache management**:
+- Both cache files are automatically deleted each time `process_policies_and_events.py` completes
+- This ensures the UI always reflects the latest data without any manual intervention
+- The cache buttons have been removed from the toolbar as they are no longer needed
 
 **Cache Behavior**:
-- Automatically tracks successfully deployed policies
-- Persists across browser sessions (stored in localStorage)
-- Badge count updates in real-time as policies are deployed
-- Clearing cache does NOT undeploy policies from Policy Registry
+- Tracks successfully deployed and archived policies across reloads
+- Cleared automatically on every data processing run
+- Clearing cache does NOT undeploy or unarchive policies from Policy Registry
 
 ---
 
