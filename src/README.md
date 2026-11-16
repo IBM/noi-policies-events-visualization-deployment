@@ -114,10 +114,10 @@ debug_timing = false
 
 [security]
 # Enable CORS (Cross-Origin Resource Sharing)
-enable_cors = true
+enable_cors = false
 
 # Allowed origins for CORS (comma-separated, * for all)
-cors_origins = *
+# cors_origins = https://viz.example.com
 
 # Enable basic authentication
 enable_auth = true
@@ -132,8 +132,8 @@ users_file = users.csv
 session_timeout = 30
 
 # Username and password for basic authentication (legacy, prefer users.csv)
-username = admin
-password = changeme
+# username = <user>
+# password = <password>
 ```
 
 ## Authentication System
@@ -186,7 +186,7 @@ The system supports three authentication methods in decreasing order of security
    - Maintained for backward compatibility
 
 3. **Single User in Configuration** (Legacy)
-   - Defined in web_interface_config.ini: `username = admin` and `password = changeme`
+   - Defined in web_interface_config.ini: `username` and `password` (no default values are provided)
    - Simplest but least secure option
    - Maintained for backward compatibility
 

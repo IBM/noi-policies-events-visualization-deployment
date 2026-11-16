@@ -87,9 +87,7 @@ spec:
         - name: ENABLE_AUTH
           value: "1"
         - name: ENABLE_CORS
-          value: "1"
-        - name: CORS_ORIGINS
-          value: "*"
+          value: "0"
         - name: CASSANDRA_HOST
           value: evtmanager-cassandra
         - name: CASSANDRA_PORT
@@ -144,8 +142,7 @@ data:
     debug_timing = false
     
     [security]
-    enable_cors = true
-    cors_origins = *
+    enable_cors = false
     enable_auth = true
     force_login_page = false
     users_file = /opt/app/users.csv
@@ -157,8 +154,6 @@ data:
     enable_https = false
     ssl_cert_file = /opt/app/cert/cert.pem
     ssl_key_file = /opt/app/cert/key.pem
-    username = admin
-    password = changeme
 ---
 apiVersion: v1
 kind: Service

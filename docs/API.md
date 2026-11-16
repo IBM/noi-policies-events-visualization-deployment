@@ -19,7 +19,8 @@ When authentication is enabled (`ENABLE_AUTH=true`), all API endpoints require H
 ### Authentication Endpoints
 
 #### POST /api/register
-Register a new user account.
+Register a new user account. Disabled by default; the endpoint returns `403`
+unless the server runs with `allow_registration = true` (`ALLOW_REGISTRATION=1`).
 
 **Request Body:**
 ```json
@@ -39,6 +40,7 @@ Register a new user account.
 
 **Errors:**
 - `400` - Invalid input or username already exists
+- `403` - Self-registration is disabled
 - `500` - Registration failed
 
 ---
@@ -466,10 +468,13 @@ All endpoints may return the following error responses:
 
 ## CORS Support
 
-When CORS is enabled (`ENABLE_CORS=true`), all API endpoints include the following headers:
+CORS is disabled by default (the UI is served from the same origin). When enabled
+(`ENABLE_CORS=1` / `enable_cors = true`) with `CORS_ORIGINS` / `cors_origins` set to an
+explicit origin, API endpoints include the following headers. If no origin is set,
+no CORS headers are sent.
 
 ```
-Access-Control-Allow-Origin: *
+Access-Control-Allow-Origin: <configured origin>
 Access-Control-Allow-Methods: GET,POST,DELETE,OPTIONS
 Access-Control-Allow-Headers: Content-Type,Authorization
 ```
@@ -478,7 +483,10 @@ Access-Control-Allow-Headers: Content-Type,Authorization
 
 ## Rate Limiting
 
-Currently, no rate limiting is implemented. Consider adding rate limiting for production deployments.
+Only login is rate limited. After `login_max_attempts` failed form logins (default 5)
+for a client IP and username pair, further attempts return `429 Too Many Requests` with a
+`Retry-After` header for `login_lockout_seconds` (default 300). A successful login resets the counter.
+Other endpoints are not rate limited.
 
 ---
 

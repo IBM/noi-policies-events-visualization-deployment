@@ -80,8 +80,8 @@ For questions or discussions, please:
 
 1. Clone the repository:
    ```bash
-   git clone https://github.ibm.com/hdm/noi-aiops-helping-tools-scripts.git
-   cd noi-aiops-helping-tools-scripts/policies_and_events_visualization
+   git clone https://github.com/IBM/noi-policies-events-visualization-deployment.git
+   cd noi-policies-events-visualization-deployment
    ```
 
 2. Install dependencies:

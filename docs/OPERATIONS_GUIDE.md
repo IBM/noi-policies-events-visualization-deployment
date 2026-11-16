@@ -18,11 +18,7 @@ This guide provides step-by-step instructions for operating the Policy and Event
 ## Prerequisites
 
 ### Authentication
-The system comes with a default admin user:
-- **Username**: `admin`
-- **Password**: `changeme`
-
-⚠️ **Security Note**: Change the default password immediately after first login using the user management tools.
+There is no default account. Create the first user with `python3 manage_users.py add <username>` before enabling authentication. Self-registration is disabled unless `allow_registration = true` (or `ALLOW_REGISTRATION=1`) is set.
 
 ### Required Access
 - OpenShift cluster access with `oc` CLI configured
@@ -49,7 +45,7 @@ oc project your-namespace
 
 ```bash
 # Navigate to the source directory
-cd policies_and_events_visualization/src
+cd noi-policies-events-visualization-deployment/src
 
 # Run the Cassandra extraction script
 ./copy_policies_details_from_cassandra.sh
@@ -121,8 +117,7 @@ Press Ctrl+C to stop
    ![Login Page](images/login-page.png)
 
 3. Login with credentials:
-   - Username: `admin`
-   - Password: `changeme` (or your custom password)
+   - Username and password of a user created with `manage_users.py`
 
 4. After successful login, you will see the policy and event visualization interface
 
@@ -155,7 +150,7 @@ oc project your-namespace
 
 ```bash
 # Navigate to the project root
-cd policies_and_events_visualization
+cd noi-policies-events-visualization-deployment
 
 # Run the interactive setup script
 ./setup-web-interface.sh
@@ -206,9 +201,7 @@ oc get route policy-viz
 
    ![Login Page](images/login-page.png)
 
-4. Login with default credentials:
-   - Username: `admin`
-   - Password: `changeme`
+4. Login with a user created with `manage_users.py`
 
 ### Step 5: Configure Auto-Update (Optional)
 
@@ -232,7 +225,7 @@ oc logs -f deployment/policy-viz -c auto-update
 When running locally, use the `manage_users.py` script:
 
 ```bash
-cd policies_and_events_visualization/src
+cd noi-policies-events-visualization-deployment/src
 
 # Add a new user
 python3 manage_users.py add-user john.doe
@@ -249,7 +242,7 @@ To add users to the OCP deployment, you need to update the users.csv file in the
 
 ```bash
 # Step 1: Add user locally
-cd policies_and_events_visualization/src
+cd noi-policies-events-visualization-deployment/src
 python3 manage_users.py add-user jane.smith
 # Enter password when prompted
 
@@ -338,15 +331,17 @@ ls -lh output/*.csv
 python3 process_policies_and_events.py
 ```
 
-#### Issue: "Authentication failed" with default credentials
+#### Issue: "Authentication failed" or "Too many failed login attempts"
 
 **Solution**:
 ```bash
-# Reset to default admin user
-python3 manage_users.py reset-admin
-
-# This creates admin/changeme
+# Create or reset a user's password
+python3 manage_users.py add <username>
 ```
+
+After `login_max_attempts` (default 5) failures, a client IP and username pair is
+blocked for `login_lockout_seconds` (default 300). Wait for the lockout to expire or
+restart the web interface to clear it.
 
 ### OpenShift Operation Issues
 
@@ -431,7 +426,7 @@ cp users.csv.template users.csv
 ```bash
 # Full workflow
 oc login --server=<cluster> --token=<token>
-cd policies_and_events_visualization/src
+cd noi-policies-events-visualization-deployment/src
 ./copy_policies_details_from_cassandra.sh  # Creates 3 CSV files in current dir
 python3 process_policies_and_events.py      # Processes CSVs into output/ dir
 python3 web_interface.py                    # Start server (default port 5000)
@@ -442,7 +437,7 @@ python3 web_interface.py --port 8080        # Or use custom port
 ```bash
 # Deployment
 oc login --server=<cluster> --token=<token>
-cd policies_and_events_visualization
+cd noi-policies-events-visualization-deployment
 ./setup-web-interface.sh
 
 # Management

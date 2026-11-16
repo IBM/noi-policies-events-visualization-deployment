@@ -210,7 +210,7 @@ POLICY_ID_INDEX: Dict[str, List[int]] = {}          # policy_id -> list of row i
 **Files**:
 - `static/app.js` - Main JavaScript application
 - `static/styles.css` - Styling
-- `policy_event_viewer.html` - HTML template
+- `templates/viewer.html` - HTML template (copied to `policy_event_viewer.html` in the output directory)
 
 **Key Components**:
 
@@ -392,7 +392,7 @@ User Input: "network error"
 | **Storage** | PersistentVolume (optional) | Data persistence |
 | **Networking** | Service/Route | Network access |
 
-**Note**: Docker/Dockerfile can be used for containerization but is not included in the repository. See `src/README_create_microservice.md` for instructions on creating a Dockerfile if needed.
+**Note**: Docker/Dockerfile can be used for containerization but is not included in the repository.
 
 ---
 
@@ -647,21 +647,20 @@ def log_audit(event_type, username, client_ip="unknown", details=None, status="s
 
 ### 4. CORS Configuration
 
-**Implementation** (web_interface.py, line 1524+):
+**Implementation** (`_add_cors_headers` in web_interface.py):
 ```python
 def _add_cors_headers(self):
     """Add CORS headers to the response if enabled"""
-    if ENABLE_CORS:
+    if ENABLE_CORS and CORS_ORIGINS:
         self.send_header("Access-Control-Allow-Origin", CORS_ORIGINS)
         self.send_header("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS")
         self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
 ```
 
 **Configuration**:
-- Enabled by default
-- Configurable origins (default: "*" for development)
+- Disabled by default (the UI and API share an origin)
+- When enabled, `cors_origins` must name an explicit origin; no header is sent if it is empty
 - Supports preflight OPTIONS requests
-- Can be restricted to specific domains in production
 
 ### 5. Security Best Practices
 
@@ -671,16 +670,20 @@ def _add_cors_headers(self):
 - Session timeout with configurable duration
 - Audit logging for security events
 - HTTP-only cookies to prevent XSS
-- CORS headers for cross-origin control
+- CORS disabled by default; explicit origin required when enabled
+- Login rate limiting per (client IP, username): lockout after `login_max_attempts` failures (default 5) for `login_lockout_seconds` (default 300)
+- Self-registration disabled by default (`allow_registration`)
+- No built-in default account; users come from `users.csv` or explicit configuration
+- Static file serving confined to the static directory (path traversal returns 404)
 - Security headers (CSP, X-Frame-Options, X-Content-Type-Options, HSTS)
   - Content-Security-Policy: `frame-ancestors 'self';`
   - X-Frame-Options: `SAMEORIGIN`
   - X-Content-Type-Options: `nosniff`
-  - Strict-Transport-Security: `max-age=31536000; includeSubDomains`
+  - Strict-Transport-Security: `max-age=31536000; includeSubDomains` (sent only when the server itself serves HTTPS)
 
 **Not Implemented**:
 - Input sanitization (relies on JSON parsing and type checking)
-- Rate limiting for login attempts
+- Rate limiting for endpoints other than login
 - HTTPS enforcement (must be configured at deployment/infrastructure level)
 - Role-based access control (RBAC)
 - Comprehensive CSP (only frame-ancestors directive implemented)

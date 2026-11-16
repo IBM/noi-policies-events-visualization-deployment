@@ -128,11 +128,8 @@ if oc expose service "$SERVICE_NAME" --name="$ROUTE_NAME" -n "$NAMESPACE" 2>/dev
         echo ""
         echo "  http://$ROUTE_HOST"
         echo ""
-        print_info "Default credentials:"
-        echo "  Username: admin"
-        echo "  Password: changeme"
-        echo ""
-        print_warning "Remember to change the default password after first login!"
+        print_info "There is no default account. Create a user with:"
+        echo "  python3 manage_users.py add <username>"
     else
         print_warning "Route created but URL could not be retrieved"
         echo "Run: oc get route $ROUTE_NAME -n $NAMESPACE"

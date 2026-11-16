@@ -79,10 +79,19 @@ DEBUG_TIMING = bool(int(os.environ.get("DEBUG_TIMING", "0")))
 ENABLE_AUTH = bool(int(os.environ.get("ENABLE_AUTH", "1")))
 AUTH_CREDENTIALS = {}  # Will be populated with username:password pairs
 USERS_FILE = os.environ.get("USERS_FILE", "users.csv")
-ENABLE_CORS = bool(int(os.environ.get("ENABLE_CORS", "1")))
-CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "*")
+# CORS is off by default: the UI is served from the same origin as the API, so it is not needed.
+# When enabled, set CORS_ORIGINS to an explicit comma-separated origin list rather than "*".
+ENABLE_CORS = bool(int(os.environ.get("ENABLE_CORS", "0")))
+CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "")
+# Set to True once the listening socket is actually wrapped with TLS (controls HSTS).
+HTTPS_ACTIVE = False
 FORCE_LOGIN_PAGE = bool(int(os.environ.get("FORCE_LOGIN_PAGE", "1")))
 SESSION_TIMEOUT = int(os.environ.get("SESSION_TIMEOUT", "30"))  # in minutes, 0 to disable
+# Self-registration lets anyone who can reach the server create an account, so it is off by default.
+ALLOW_REGISTRATION = bool(int(os.environ.get("ALLOW_REGISTRATION", "0")))
+# Login rate limiting: block a (client IP, username) pair after too many failures in a window.
+LOGIN_MAX_ATTEMPTS = int(os.environ.get("LOGIN_MAX_ATTEMPTS", "5"))
+LOGIN_LOCKOUT_SECONDS = int(os.environ.get("LOGIN_LOCKOUT_SECONDS", "300"))
 
 # -------------------- Audit logging --------------------
 AUDIT_LOG_FILE = os.environ.get("AUDIT_LOG_FILE", "logs/audit.log")
@@ -129,11 +138,40 @@ def log_audit(event_type, username, client_ip="unknown", details=None, status="s
 # Session tracking
 active_sessions = {}  # username -> last_activity_timestamp
 
-# Default credentials (for backward compatibility)
-default_username = os.environ.get("AUTH_USERNAME", "admin")
-default_password = os.environ.get("AUTH_PASSWORD", "changeme")
+# Optional bootstrap credentials supplied explicitly through the environment.
+# There is no built-in default account: setting only one of the two (or neither) adds nothing.
+default_username = os.environ.get("AUTH_USERNAME", "")
+default_password = os.environ.get("AUTH_PASSWORD", "")
 if default_username and default_password:
     AUTH_CREDENTIALS[default_username] = default_password
+
+# Failed-login tracking for rate limiting: (client_ip, username) -> [timestamps]
+_failed_logins: Dict[Tuple[str, str], List[float]] = {}
+_failed_logins_lock = threading.Lock()
+
+def login_is_locked(client_ip: str, username: str) -> bool:
+    """Return True if this (client_ip, username) exceeded LOGIN_MAX_ATTEMPTS within the lockout window."""
+    if LOGIN_MAX_ATTEMPTS <= 0:
+        return False
+    now = time.time()
+    key = (client_ip, username)
+    with _failed_logins_lock:
+        recent = [t for t in _failed_logins.get(key, []) if now - t < LOGIN_LOCKOUT_SECONDS]
+        if recent:
+            _failed_logins[key] = recent
+        else:
+            _failed_logins.pop(key, None)
+        return len(recent) >= LOGIN_MAX_ATTEMPTS
+
+def record_failed_login(client_ip: str, username: str) -> None:
+    if LOGIN_MAX_ATTEMPTS <= 0:
+        return
+    with _failed_logins_lock:
+        _failed_logins.setdefault((client_ip, username), []).append(time.time())
+
+def clear_failed_logins(client_ip: str, username: str) -> None:
+    with _failed_logins_lock:
+        _failed_logins.pop((client_ip, username), None)
 
 def parse_global_search(term: str):
     if not term:
@@ -484,7 +522,8 @@ def _add_security_headers(handler):
     handler.send_header("Content-Security-Policy", "frame-ancestors 'self';")
     handler.send_header("X-Frame-Options", "SAMEORIGIN")
     handler.send_header("X-Content-Type-Options", "nosniff")
-    handler.send_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
+    if HTTPS_ACTIVE:
+        handler.send_header("Strict-Transport-Security", "max-age=31536000; includeSubDomains")
 
 def _json_response(handler, obj, status=200, headers=None):
     body = json.dumps(obj).encode("utf-8")
@@ -1733,7 +1772,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _add_cors_headers(self):
         """Add CORS headers to the response if enabled"""
-        if ENABLE_CORS:
+        if ENABLE_CORS and CORS_ORIGINS:
             self.send_header("Access-Control-Allow-Origin", CORS_ORIGINS)
             self.send_header("Access-Control-Allow-Methods", "GET,POST,DELETE,OPTIONS")
             self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
@@ -1799,19 +1838,29 @@ class Handler(BaseHTTPRequestHandler):
             
             username = form_data.get('username', '')
             password = form_data.get('password', '')
+            client_ip = self.client_address[0]
             
-            # Debug logging
-            print(f"[auth] Login attempt for user: {username}")
-            print(f"[auth] Available users: {list(AUTH_CREDENTIALS.keys())}")
+            # Rate limiting: refuse further attempts for this (ip, user) while locked out
+            if login_is_locked(client_ip, username):
+                log_audit("LOGIN", username, client_ip=client_ip, status="locked", details="too many failed attempts")
+                self.send_response(429)
+                self.send_header('Retry-After', str(LOGIN_LOCKOUT_SECONDS))
+                self.send_header('Content-Type', 'text/plain; charset=utf-8')
+                body = b"Too many failed login attempts. Try again later."
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+            
+            debug_print(f"[auth] Login attempt for user: {username}")
             
             # Check credentials
             if username in AUTH_CREDENTIALS:
                 stored_hash = AUTH_CREDENTIALS[username]
-                print(f"[auth] Found stored hash for {username}: {stored_hash[:20]}...")
                 
                 # Try verification
                 if verify_password(stored_hash, password):
-                    print(f"[auth] Password verification successful for {username}")
+                    clear_failed_logins(client_ip, username)
                     # Set Authorization header for this request
                     auth_data = base64.b64encode(f"{username}:{password}".encode('utf-8')).decode('utf-8')
                     self.headers['Authorization'] = f'Basic {auth_data}'
@@ -1835,14 +1884,10 @@ class Handler(BaseHTTPRequestHandler):
                     self.end_headers()
                     return
                 else:
-                    print(f"[auth] Password verification failed for {username}")
-                    # Log failed login attempt
-                    client_ip = self.client_address[0]
+                    record_failed_login(client_ip, username)
                     log_audit("LOGIN", username, client_ip=client_ip, status="failed", details="Invalid password")
             else:
-                print(f"[auth] User not found: {username}")
-                # Log failed login attempt
-                client_ip = self.client_address[0]
+                record_failed_login(client_ip, username)
                 log_audit("LOGIN", username, client_ip=client_ip, status="failed", details="User not found")
             
             # If authentication failed, redirect to login page with error
@@ -1958,6 +2003,10 @@ class Handler(BaseHTTPRequestHandler):
         """Handle user registration requests"""
         if not ENABLE_AUTH:
             return _json_response(self, {"error": "Authentication is disabled"}, status=400)
+        if not ALLOW_REGISTRATION:
+            log_audit("USER_REGISTER", "unknown", client_ip=self.client_address[0],
+                      status="denied", details="self-registration disabled")
+            return _json_response(self, {"error": "Self-registration is disabled"}, status=403)
             
         try:
             data = _read_body_json(self)
@@ -2459,9 +2508,15 @@ class Handler(BaseHTTPRequestHandler):
     def _static(self):
         parsed = urlparse(self.path)
         rel = parsed.path[len("/static/"):]
-        import posixpath as _pp
-        safe = _pp.normpath(rel).lstrip("/")
-        full = os.path.join("static", safe)
+        # Resolve both the static root and the requested file, and require the
+        # file to stay inside the root (blocks ../ traversal and symlink escapes).
+        root = os.path.realpath("static")
+        full = os.path.realpath(os.path.join(root, rel))
+        try:
+            if os.path.commonpath([root, full]) != root or full == root:
+                return _send_404(self)
+        except ValueError:
+            return _send_404(self)
         if not os.path.isfile(full):
             return _send_404(self)
 
@@ -3431,11 +3486,11 @@ class Handler(BaseHTTPRequestHandler):
 def start_web_server(output_dir: str, port: int, use_sqlite: bool = False, sqlite_path: Optional[str] = None,
                     event_instances: Optional[str] = None, bind_address: str = DEFAULT_BIND_ADDRESS,
                     enable_auth: bool = False, auth_credentials: Optional[Dict[str, str]] = None,
-                    enable_cors: bool = True, cors_origins: str = "*",
+                    enable_cors: bool = False, cors_origins: str = "",
                     enable_https: bool = False, ssl_cert_file: Optional[str] = None, ssl_key_file: Optional[str] = None) -> None:
     global DB_CONN, CONDSETS_BY_POLICY
     global SERVER_OUTPUT_DIR, SERVER_SQLITE_PATH, SERVER_EVENT_INSTANCES, SERVER_USE_SQLITE, _DATA_VERSION
-    global ENABLE_AUTH, AUTH_CREDENTIALS, ENABLE_CORS, CORS_ORIGINS
+    global ENABLE_AUTH, AUTH_CREDENTIALS, ENABLE_CORS, CORS_ORIGINS, HTTPS_ACTIVE
     
     # Apply security settings
     ENABLE_AUTH = enable_auth
@@ -3444,10 +3499,9 @@ def start_web_server(output_dir: str, port: int, use_sqlite: bool = False, sqlit
     if auth_credentials:
         AUTH_CREDENTIALS.update(auth_credentials)
     
-    # For backward compatibility, if no credentials provided but auth is enabled,
-    # ensure we have at least the default admin user
     if ENABLE_AUTH and not AUTH_CREDENTIALS:
-        AUTH_CREDENTIALS["admin"] = "changeme"
+        print("[server] Warning: authentication is enabled but no users are configured; "
+              "nobody can log in. Create users with manage_users.py.")
         
     ENABLE_CORS = enable_cors
     CORS_ORIGINS = cors_origins
@@ -3576,6 +3630,7 @@ IP.1 = 127.0.0.1
                     ssl_context.load_cert_chain(ssl_cert_file, ssl_key_file)
                     srv.socket = ssl_context.wrap_socket(srv.socket, server_side=True)
                     protocol = "https"
+                    HTTPS_ACTIVE = True
                     print(f"[server] HTTPS enabled with certificate: {ssl_cert_file}")
             except Exception as e:
                 print(f"[server] Error enabling HTTPS: {e}")
@@ -3615,11 +3670,12 @@ def load_config_file(config_path: str) -> Dict[str, Any]:
         'event_instances': DEFAULT_EVENT_INSTANCES_FILE,
         'access_log': False,
         'debug_timing': False,
-        'enable_cors': True,
-        'cors_origins': '*',
+        'enable_cors': False,
+        'cors_origins': '',
         'enable_auth': False,
-        'username': 'admin',
-        'password': 'changeme',
+        'allow_registration': ALLOW_REGISTRATION,
+        'login_max_attempts': LOGIN_MAX_ATTEMPTS,
+        'login_lockout_seconds': LOGIN_LOCKOUT_SECONDS,
         'session_timeout': 30,
         'enable_audit': True,
         'audit_log_file': 'audit.log',
@@ -3666,6 +3722,12 @@ def load_config_file(config_path: str) -> Dict[str, Any]:
                 config['cors_origins'] = cfg['security']['cors_origins']
             if 'enable_auth' in cfg['security']:
                 config['enable_auth'] = cfg.getboolean('security', 'enable_auth')
+            if 'allow_registration' in cfg['security']:
+                config['allow_registration'] = cfg.getboolean('security', 'allow_registration')
+            if 'login_max_attempts' in cfg['security']:
+                config['login_max_attempts'] = cfg.getint('security', 'login_max_attempts')
+            if 'login_lockout_seconds' in cfg['security']:
+                config['login_lockout_seconds'] = cfg.getint('security', 'login_lockout_seconds')
             if 'username' in cfg['security']:
                 config['username'] = cfg['security']['username']
             if 'password' in cfg['security']:
@@ -3685,7 +3747,7 @@ def load_config_file(config_path: str) -> Dict[str, Any]:
     return config
 
 def main():
-    global ACCESS_LOG, DEBUG_TIMING
+    global ACCESS_LOG, DEBUG_TIMING, ALLOW_REGISTRATION, LOGIN_MAX_ATTEMPTS, LOGIN_LOCKOUT_SECONDS
     parser = argparse.ArgumentParser(description="Scalable Policy & Event Web UI (stdlib server, quiet by default)")
     parser.add_argument("--config", default=DEFAULT_CONFIG_FILE, help=f"Path to configuration file (default: {DEFAULT_CONFIG_FILE})")
     parser.add_argument("--output-dir", default=None, help=f"Directory with CSVs (default: {DEFAULT_OUTPUT_DIR})")
@@ -3724,6 +3786,9 @@ def main():
         ACCESS_LOG = True
     if args.debug_timing or config['debug_timing']:
         DEBUG_TIMING = True
+    ALLOW_REGISTRATION = config['allow_registration']
+    LOGIN_MAX_ATTEMPTS = config['login_max_attempts']
+    LOGIN_LOCKOUT_SECONDS = config['login_lockout_seconds']
     
     # Print configuration summary
     print(f"[server] Configuration:")
@@ -3736,8 +3801,8 @@ def main():
     
     # Get security settings from config
     enable_auth = config.get('enable_auth', False)
-    enable_cors = config.get('enable_cors', True)
-    cors_origins = config.get('cors_origins', '*')
+    enable_cors = config.get('enable_cors', False)
+    cors_origins = config.get('cors_origins', '')
     
     # Process credentials
     auth_credentials = {}
@@ -3776,9 +3841,6 @@ def main():
                 config['backup_count'] = cfg.getint('security', 'backup_count')
     except Exception as e:
         print(f"[config] Error processing authentication credentials: {e}")
-        # Fallback to default credentials
-        if enable_auth:
-            auth_credentials = {"admin": "changeme"}
     
     # Print security configuration
     print(f"[server] - Authentication: {'Enabled' if enable_auth else 'Disabled'}")

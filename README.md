@@ -39,8 +39,8 @@ This tool provides:
 
 ```bash
 # Clone the repository
-git clone <repository-url>
-cd policies_and_events_visualization
+git clone https://github.com/IBM/noi-policies-events-visualization-deployment.git
+cd noi-policies-events-visualization-deployment
 
 # Install dependencies
 pip install -r src/requirements.txt
@@ -66,7 +66,7 @@ python web_interface.py
 oc login <cluster-url>
 
 # Run the setup script
-cd policies_and_events_visualization
+cd noi-policies-events-visualization-deployment
 ./setup-web-interface.sh
 
 # Follow the interactive prompts

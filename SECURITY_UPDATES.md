@@ -1,5 +1,35 @@
 # Security Updates
 
+## Web Interface Hardening
+
+### Date: 2026-11-16
+
+**Issue**: A report showed that `GET /static/../<path>` returned arbitrary files readable by the
+server process (source code, `/etc/passwd`), without authentication. A follow-up review found
+related weaknesses in authentication defaults.
+
+### Actions Taken
+
+- `_static()` resolves the requested path and refuses anything outside the static root (404).
+- `/api/register` returns 403 unless `allow_registration` / `ALLOW_REGISTRATION` is set.
+- The hard-coded `admin` / `changeme` account was removed everywhere (code fallbacks, OpenShift
+  ConfigMap, `create-route.sh`, `start_visualization_service.sh`, docs). Existing deployments that
+  relied on it must create a user with `python3 manage_users.py add <username>`.
+- Form login is rate limited per (client IP, username); see `login_max_attempts` and
+  `login_lockout_seconds`.
+- CORS defaults to disabled and `*` is no longer a default.
+- HSTS is sent only when HTTPS is active.
+
+### Known Remaining Items
+
+- The `auth_token` cookie is `base64(username:password)` and lacks `Secure` / `SameSite`.
+- `?auth=<base64 user:pass>` on GET puts credentials in URLs.
+- Login rate limiting covers the form login only, not Basic auth or cookie requests.
+- The login form values are not URL-decoded, so passwords with `%` or `+` fail through the form.
+- Password comparison is not constant-time and plaintext stored values are accepted.
+
+---
+
 ## Dependency Vulnerability Fixes
 
 ### Date: 2026-05-25

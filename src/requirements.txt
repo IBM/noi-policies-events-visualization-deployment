@@ -33,7 +33,7 @@ tqdm>=4.67.1,<5.0.0
 
 # === Optional Dependencies for Test/Generation Scripts ===
 
-# Data manipulation library (only needed for generate_policy_exports*.py scripts)
+# Data manipulation library (only needed for generate_synthetic_policy_data.py)
 # Not required for core functionality
 # Updated to latest stable version to address multiple CVEs
 # Note: pandas has many transitive dependencies that may trigger security alerts
