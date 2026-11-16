@@ -29,7 +29,9 @@
 
 # Service configuration
 SERVICE_NAME="visualization-service"
-SCRIPT_PATH="/opt/dev/yasser_python_scripts/policies_and_events_visualization_auto_update/start_visualization_service.sh"
+# Path to start_visualization_service.sh. Override SCRIPT_PATH in /etc/sysconfig/visualization-service
+# if the repository is installed somewhere else.
+SCRIPT_PATH="/opt/noi-policies-events-visualization-deployment/src/start_visualization_service.sh"
 PIDFILE="/var/run/visualization-service.pid"
 LOCKFILE="/var/lock/subsys/visualization-service"
 USER="root"
