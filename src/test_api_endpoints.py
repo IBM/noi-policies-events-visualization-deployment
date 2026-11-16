@@ -151,6 +151,18 @@ class APITester:
                 status == 200,
                 error if status != 200 else f"Status: {status}"
             )
+        
+        # Path traversal out of the static directory must never be served
+        for file_path in ("/static/../web_interface.py",
+                          "/static/..%2fweb_interface.py",
+                          "/static/../../../../../../etc/passwd"):
+            status, data, error = self._make_request("GET", file_path)
+            leaked = isinstance(data, str) and ("root:" in data or "def _static" in data)
+            self._print_test(
+                f"GET {file_path} (traversal blocked)",
+                status == 404 and not leaked,
+                f"Status: {status}"
+            )
     
     def test_authentication_endpoints(self):
         """Test authentication endpoints"""
@@ -171,10 +183,10 @@ class APITester:
             {"username": test_user, "password": "test123456"}
         )
         
-        if status == 400 and "disabled" in error.lower():
+        if status in (400, 403) and "disabled" in error.lower():
             self._print_skip(
                 "POST /api/register",
-                "Authentication is disabled on server (set ENABLE_AUTH=true to test)"
+                "Registration is disabled on server (authentication off, or ALLOW_REGISTRATION not set)"
             )
         else:
             self._print_test(

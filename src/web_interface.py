@@ -83,6 +83,8 @@ ENABLE_CORS = bool(int(os.environ.get("ENABLE_CORS", "1")))
 CORS_ORIGINS = os.environ.get("CORS_ORIGINS", "*")
 FORCE_LOGIN_PAGE = bool(int(os.environ.get("FORCE_LOGIN_PAGE", "1")))
 SESSION_TIMEOUT = int(os.environ.get("SESSION_TIMEOUT", "30"))  # in minutes, 0 to disable
+# Self-registration lets anyone who can reach the server create an account, so it is off by default.
+ALLOW_REGISTRATION = bool(int(os.environ.get("ALLOW_REGISTRATION", "0")))
 
 # -------------------- Audit logging --------------------
 AUDIT_LOG_FILE = os.environ.get("AUDIT_LOG_FILE", "logs/audit.log")
@@ -1958,6 +1960,10 @@ class Handler(BaseHTTPRequestHandler):
         """Handle user registration requests"""
         if not ENABLE_AUTH:
             return _json_response(self, {"error": "Authentication is disabled"}, status=400)
+        if not ALLOW_REGISTRATION:
+            log_audit("USER_REGISTER", "unknown", client_ip=self.client_address[0],
+                      status="denied", details="self-registration disabled")
+            return _json_response(self, {"error": "Self-registration is disabled"}, status=403)
             
         try:
             data = _read_body_json(self)
@@ -2459,9 +2465,15 @@ class Handler(BaseHTTPRequestHandler):
     def _static(self):
         parsed = urlparse(self.path)
         rel = parsed.path[len("/static/"):]
-        import posixpath as _pp
-        safe = _pp.normpath(rel).lstrip("/")
-        full = os.path.join("static", safe)
+        # Resolve both the static root and the requested file, and require the
+        # file to stay inside the root (blocks ../ traversal and symlink escapes).
+        root = os.path.realpath("static")
+        full = os.path.realpath(os.path.join(root, rel))
+        try:
+            if os.path.commonpath([root, full]) != root or full == root:
+                return _send_404(self)
+        except ValueError:
+            return _send_404(self)
         if not os.path.isfile(full):
             return _send_404(self)
 
@@ -3618,6 +3630,7 @@ def load_config_file(config_path: str) -> Dict[str, Any]:
         'enable_cors': True,
         'cors_origins': '*',
         'enable_auth': False,
+        'allow_registration': ALLOW_REGISTRATION,
         'username': 'admin',
         'password': 'changeme',
         'session_timeout': 30,
@@ -3660,6 +3673,8 @@ def load_config_file(config_path: str) -> Dict[str, Any]:
         
         # Security section
         if 'security' in cfg:
+            if 'allow_registration' in cfg['security']:
+                config['allow_registration'] = cfg.getboolean('security', 'allow_registration')
             if 'enable_cors' in cfg['security']:
                 config['enable_cors'] = cfg.getboolean('security', 'enable_cors')
             if 'cors_origins' in cfg['security']:
@@ -3685,7 +3700,7 @@ def load_config_file(config_path: str) -> Dict[str, Any]:
     return config
 
 def main():
-    global ACCESS_LOG, DEBUG_TIMING
+    global ACCESS_LOG, DEBUG_TIMING, ALLOW_REGISTRATION
     parser = argparse.ArgumentParser(description="Scalable Policy & Event Web UI (stdlib server, quiet by default)")
     parser.add_argument("--config", default=DEFAULT_CONFIG_FILE, help=f"Path to configuration file (default: {DEFAULT_CONFIG_FILE})")
     parser.add_argument("--output-dir", default=None, help=f"Directory with CSVs (default: {DEFAULT_OUTPUT_DIR})")
@@ -3724,6 +3739,7 @@ def main():
         ACCESS_LOG = True
     if args.debug_timing or config['debug_timing']:
         DEBUG_TIMING = True
+    ALLOW_REGISTRATION = config['allow_registration']
     
     # Print configuration summary
     print(f"[server] Configuration:")
