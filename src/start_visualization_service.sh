@@ -245,11 +245,8 @@ access_log = true
 debug_timing = false
 
 [security]
-enable_cors = true
-cors_origins = *
+enable_cors = false
 enable_auth = false
-username = admin
-password = changeme
 EOF
   fi
   

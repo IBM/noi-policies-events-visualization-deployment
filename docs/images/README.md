@@ -473,7 +473,7 @@ This pattern policy:
 **Features shown**:
 - **Script Execution**:
   - Command: `./copy_policies_details_from_cassandra.sh`
-  - Working directory: `policies_and_events_visualization/src`
+  - Working directory: `noi-policies-events-visualization-deployment/src`
   - Runs in terminal with real-time output
   
 - **Cassandra Pod Detection**:

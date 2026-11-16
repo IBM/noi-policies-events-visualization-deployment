@@ -35,8 +35,8 @@ Guide for developers contributing to the NOI Policy & Event Visualization projec
 ### Clone Repository
 
 ```bash
-git clone https://github.com/your-org/noi-policy-visualization.git
-cd noi-policy-visualization
+git clone https://github.com/IBM/noi-policies-events-visualization-deployment.git
+cd noi-policies-events-visualization-deployment
 ```
 
 ### Virtual Environment
@@ -90,7 +90,7 @@ cassandra-driver>=3.25.0
 ## Project Structure
 
 ```
-policies_and_events_visualization/
+noi-policies-events-visualization-deployment/
 ├── src/                              # Source code
 │   ├── web_interface.py              # Main web server
 │   ├── process_policies_and_events.py # Data processing

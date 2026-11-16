@@ -46,8 +46,8 @@ Complete installation instructions for NOI Policy & Event Visualization.
 ### 1. Clone the Repository
 
 ```bash
-git clone https://github.com/your-org/noi-policy-visualization.git
-cd noi-policy-visualization/policies_and_events_visualization
+git clone https://github.com/IBM/noi-policies-events-visualization-deployment.git
+cd noi-policies-events-visualization-deployment
 ```
 
 ### 2. Install Python Dependencies
@@ -84,8 +84,10 @@ enable_auth = true
 force_login_page = true
 users_file = users.csv
 session_timeout = 30  # minutes
-enable_cors = true
-cors_origins = *
+enable_cors = false
+allow_registration = false
+login_max_attempts = 5
+login_lockout_seconds = 300
 ```
 
 ### 4. Create Initial User (if needed)
@@ -181,7 +183,7 @@ Open your browser to:
 The setup script handles everything automatically:
 
 ```bash
-cd policies_and_events_visualization
+cd noi-policies-events-visualization-deployment
 ./setup-web-interface.sh
 ```
 
@@ -234,8 +236,13 @@ users_file = users.csv         # User credentials file
 session_timeout = 30           # Session timeout in minutes (0 = no timeout)
 
 # CORS
-enable_cors = true             # Enable cross-origin requests
-cors_origins = *               # Allowed origins (* = all)
+enable_cors = false            # Enable cross-origin requests (off by default)
+# cors_origins = https://viz.example.com   # Explicit origins; only used if enable_cors = true
+
+# Registration and login protection
+allow_registration = false     # Allow anyone to self-register via /api/register
+login_max_attempts = 5         # Failed logins before lockout
+login_lockout_seconds = 300    # Lockout duration
 
 # Audit
 enable_audit = true            # Enable audit logging
@@ -254,7 +261,7 @@ deployment_timeout = 60        # seconds
 ### Data Directory Structure
 
 ```
-policies_and_events_visualization/
+noi-policies-events-visualization-deployment/
 ├── README.md
 ├── setup-web-interface.sh
 ├── run_local.sh

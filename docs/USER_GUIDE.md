@@ -57,16 +57,16 @@ Complete guide for using the NOI Policy & Event Visualization tool.
 
 ### First Login
 
-**Default Credentials**:
-- Username: `admin`
-- Password: `changeme`
+There is no default account. An administrator creates users on the server/pod:
 
-⚠️ **Important**: Change the default password immediately after first login!
+```bash
+python manage_users.py add <username>
+```
 
-**Changing Password**:
+**Changing Password** (`add` updates an existing user):
 ```bash
 # On the server/pod
-python manage_users.py change-password admin
+python manage_users.py add <username>
 ```
 
 ---

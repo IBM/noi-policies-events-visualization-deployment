@@ -19,7 +19,7 @@ Defaults:
   --max-events 100
 
 Example:
-  python generate_policy_exports.py \
+  python generate_synthetic_policy_data.py \
     --num-policies 50000 \
     --max-events 100 \
     --pattern-policies-template "policies_export(2).csv" \

@@ -7,3 +7,7 @@ deployed_cache.json
 api_url_login.txt
 archived_cache.json
 logs/auto_update.pid
+
+__pycache__/
+*.pyc
+*.new

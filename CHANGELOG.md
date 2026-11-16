@@ -25,6 +25,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 
 ### Security
+- Fix unauthenticated arbitrary file read via path traversal in `/static/` (`/static/../…`);
+  requests resolving outside the static directory now return 404
+- Self-registration (`/api/register`) is disabled by default; enable with
+  `allow_registration = true` or `ALLOW_REGISTRATION=1`
+- Remove the built-in `admin` / `changeme` account from the code, deployment YAML,
+  scripts and docs; create users with `manage_users.py add`
+- Add login rate limiting per (client IP, username): `login_max_attempts` (default 5) and
+  `login_lockout_seconds` (default 300); locked attempts return HTTP 429
+- CORS is disabled by default and no longer defaults to `*`
+- Send `Strict-Transport-Security` only when the server serves HTTPS
 - Updated Python dependencies to address 21 vulnerabilities (4 high, 16 moderate, 1 low)
 - Updated scylla-driver from >=3.25.0 to >=3.29.1,<4.0.0
 - Updated orjson from >=3.6.0 to >=3.10.7,<4.0.0
