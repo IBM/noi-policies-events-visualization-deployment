@@ -164,6 +164,10 @@ This guide explains how to install and configure the Policies and Events Visuali
    sudo chmod +x /etc/init.d/visualization-service
    ```
 
+   The script expects the repository at `/opt/noi-policies-events-visualization-deployment`.
+   If it lives elsewhere, set `SCRIPT_PATH=<path>/src/start_visualization_service.sh`
+   in `/etc/sysconfig/visualization-service`.
+
 2. Configure the service to start on boot:
    ```
    sudo chkconfig --add visualization-service
